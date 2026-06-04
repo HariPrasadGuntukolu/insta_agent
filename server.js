@@ -23,6 +23,15 @@ const PORT = process.env.PORT || 3000;
 const configPath = path.join(__dirname, 'config.json');
 const logsFile = path.join(__dirname, 'database/logs.json');
 
+// Load Schedule Config dynamically from config.json
+const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+const collectTime = config.pipeline_schedule?.news_collect_time || "06:00";
+const publishTime = config.pipeline_schedule?.publish_time || "19:00";
+
+const [collectHour, collectMinute] = collectTime.split(':').map(Number);
+const [publishHour, publishMinute] = publishTime.split(':').map(Number);
+
+
 // Middleware
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -164,9 +173,9 @@ async function runDailyPipeline() {
       // Save to generated posts database
       savePostToDb(completePost);
 
-      // Add to scheduling queue (scheduled for 07:00 PM today)
+      // Add to scheduling queue (scheduled for configured publish time today)
       const todayPublishTime = new Date();
-      todayPublishTime.setHours(19, 0, 0, 0); // 07:00 PM
+      todayPublishTime.setHours(publishHour, publishMinute, 0, 0);
       publisher.addToQueue(completePost, todayPublishTime.toISOString(), (m) => logSystem("info", m));
     }
 
@@ -196,15 +205,15 @@ function savePostToDb(post) {
 }
 
 // AUTOMATED CRON SCHEDULER
-// Ingestion & Generation pipeline scheduled daily at 06:00 AM
-cron.schedule('0 6 * * *', () => {
-  logSystem("info", "[Scheduler] Triggering daily news harvest (06:00 AM)...");
+// Ingestion & Generation pipeline scheduled daily
+cron.schedule(`${collectMinute} ${collectHour} * * *`, () => {
+  logSystem("info", `[Scheduler] Triggering daily news harvest (${collectTime})...`);
   runDailyPipeline();
 });
 
-// Publishing Queue processing scheduled daily at 07:00 PM
+// Publishing Queue processing scheduled daily
 async function processPublishingQueue(specificPostId = null) {
-  logSystem("info", "[Scheduler] Processing daily publishing queue (07:00 PM)...");
+  logSystem("info", `[Scheduler] Processing daily publishing queue (${publishTime})...`);
   const simulationMode = process.env.SIMULATION_MODE !== "false";
   
   const queue = publisher.loadQueue();
@@ -243,7 +252,7 @@ async function processPublishingQueue(specificPostId = null) {
   }, 5000);
 }
 
-cron.schedule('0 19 * * *', () => {
+cron.schedule(`${publishMinute} ${publishHour} * * *`, () => {
   processPublishingQueue();
 });
 
@@ -261,7 +270,7 @@ app.get('/api/status', (req, res) => {
     activePipelineRun,
     pendingQueueCount: pendingCount,
     publishedCount: publishedCount,
-    nextPublishTime: "07:00 PM Daily",
+    nextPublishTime: `${publishTime} Daily`,
     envValid: !!(process.env.INSTAGRAM_ACCOUNT_ID && process.env.INSTAGRAM_ACCESS_TOKEN)
   });
 });
