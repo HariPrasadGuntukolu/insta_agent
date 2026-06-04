@@ -10,7 +10,7 @@
   },
   "pipeline_schedule": {
     "news_collect_time": "18:00",
-    "publish_time": "19:00"
+    "publish_time": "19:15"
   },
   "verification": {
     "confidence_threshold": 95,
