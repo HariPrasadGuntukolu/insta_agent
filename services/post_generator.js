@@ -5,6 +5,9 @@ const https = require('https');
 const http = require('http');
 const url = require('url');
 
+// Disable sharp cache to prevent OOM (Out Of Memory) in memory-constrained environments like Render Free Tier (512MB RAM)
+sharp.cache(false);
+
 class PostGenerator {
   constructor(configPath) {
     const configData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -235,9 +238,16 @@ class PostGenerator {
     const tempPath = path.join(__dirname, `../database/temp_${story.id}.jpg`);
     try {
       await this.downloadImage(imageUrl, tempPath);
-      const base64Content = fs.readFileSync(tempPath).toString('base64');
+      
+      // Optimize memory: Resize the downloaded image to target dimensions (920x520) and compress to JPEG
+      // before converting to base64. This prevents raw 10MB+ images from crashing the 512MB RAM container.
+      const resizedBuffer = await sharp(tempPath)
+        .resize(920, 520, { fit: 'cover' })
+        .jpeg({ quality: 80 })
+        .toBuffer();
+        
       fs.unlinkSync(tempPath); // cleanup
-      return `data:image/jpeg;base64,${base64Content}`;
+      return `data:image/jpeg;base64,${resizedBuffer.toString('base64')}`;
     } catch (err) {
       console.warn(`[PostGenerator] [Warning] Failed to fetch image: ${err.message}. Using gradient fallback.`);
       if (fs.existsSync(tempPath)) {
