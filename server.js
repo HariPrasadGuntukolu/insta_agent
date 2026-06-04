@@ -203,7 +203,7 @@ cron.schedule('0 6 * * *', () => {
 });
 
 // Publishing Queue processing scheduled daily at 07:00 PM
-async function processPublishingQueue() {
+async function processPublishingQueue(specificPostId = null) {
   logSystem("info", "[Scheduler] Processing daily publishing queue (07:00 PM)...");
   const simulationMode = process.env.SIMULATION_MODE !== "false";
   
@@ -211,7 +211,12 @@ async function processPublishingQueue() {
   const now = new Date();
   
   // Find scheduled items whose time has come (or manually triggered)
-  const pendingItems = queue.filter(item => item.status === "scheduled" || item.status === "failed");
+  let pendingItems = [];
+  if (specificPostId) {
+    pendingItems = queue.filter(item => item.id === specificPostId);
+  } else {
+    pendingItems = queue.filter(item => item.status === "scheduled" || item.status === "failed");
+  }
 
   if (pendingItems.length === 0) {
     logSystem("info", "[Scheduler] No pending posts scheduled for publishing.");
@@ -317,10 +322,21 @@ app.post('/api/pipeline/run', (req, res) => {
   res.json({ message: "News Ingestion and Generation pipeline manually triggered." });
 });
 
-// Manually trigger publishing queue
-app.post('/api/pipeline/publish', (req, res) => {
-  processPublishingQueue();
-  res.json({ message: "Queue publishing process manually triggered." });
+// Manually trigger publishing queue or single post
+app.post('/api/pipeline/publish', async (req, res) => {
+  const { postId } = req.body || {};
+  
+  if (postId) {
+    try {
+      await processPublishingQueue(postId);
+      res.json({ message: `Post publishing process manually triggered for post: ${postId}` });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  } else {
+    processPublishingQueue();
+    res.json({ message: "Queue publishing process manually triggered." });
+  }
 });
 
 // Manually trigger analytics updates

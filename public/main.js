@@ -275,8 +275,12 @@ async function publishPostDirectly(id) {
     const queueItem = queue.find(q => q.id === id);
     if (!queueItem) return;
 
-    // Send publish trigger
-    const res = await fetch('/api/pipeline/publish', { method: 'POST' });
+    // Send publish trigger with specific postId
+    const res = await fetch('/api/pipeline/publish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ postId: id })
+    });
     const data = await res.json();
     
     appendTerminalLog({ timestamp: new Date(), type: "info", message: data.message });
