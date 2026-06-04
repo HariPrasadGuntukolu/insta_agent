@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: global-viral-news-agent
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SIMULATION_MODE
+        value: "true" # Set to "false" for live API mode
+      - key: GEMINI_API_KEY
+        sync: false # Set in the Render Dashboard
+      - key: NEWS_API_KEY
+        sync: false # Set in the Render Dashboard (Optional)
+      - key: INSTAGRAM_ACCOUNT_ID
+        sync: false # Set in the Render Dashboard
+      - key: INSTAGRAM_ACCESS_TOKEN
+        sync: false # Set in the Render Dashboard
+      - key: SERVER_PUBLIC_URL
+        sync: false # Set in the Render Dashboard (your Render service URL)

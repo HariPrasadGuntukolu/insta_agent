@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GVN — Global News Media Autonomous Agent Terminal</title>
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@600;700;800;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Custom Styles -->
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <!-- System Glow Overlay -->
+  <div class="system-glow"></div>
+
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-brand">
+        <div class="brand-box">GVN</div>
+        <div class="brand-text">
+          <h1>GLOBAL VIRAL NEWS</h1>
+          <span class="sub-logo">AUTONOMOUS MEDIA OPERATIONS TERMINAL 2.0</span>
+        </div>
+      </div>
+      
+      <!-- System Stats Bar -->
+      <div class="status-bar">
+        <div class="status-item" id="status-mode">
+          <span class="status-label">MODE:</span>
+          <span class="status-value sim-badge">SIMULATION</span>
+        </div>
+        <div class="status-item" id="status-pipeline">
+          <span class="status-label">PIPELINE:</span>
+          <span class="status-value active-badge" id="pipeline-state">IDLE</span>
+        </div>
+        <div class="status-item" id="status-ws">
+          <span class="status-label">SOCKET:</span>
+          <span class="status-value connect-badge" id="ws-state">CONNECTED</span>
+        </div>
+        <div class="status-item" id="status-timer">
+          <span class="status-label">NEXT POST:</span>
+          <span class="status-value countdown-badge" id="countdown-timer">07:00 PM</span>
+        </div>
+      </div>
+
+      <!-- Quick Action Buttons -->
+      <div class="header-actions">
+        <button class="btn btn-primary" id="btn-run-pipeline">
+          <i class="fa-solid fa-play"></i> RUN NEWS PIPELINE
+        </button>
+        <button class="btn btn-secondary" id="btn-refresh-analytics">
+          <i class="fa-solid fa-arrows-rotate"></i> REFRESH STATS
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main class="app-workspace">
+      
+      <!-- LEFT COLUMN: News Aggregation & Ingestion -->
+      <section class="panel-column left-col">
+        <div class="panel-header">
+          <h2><i class="fa-solid fa-globe"></i> GLOBAL INGESTION FEED</h2>
+          <span class="panel-subtitle" id="news-count">0 stories cached</span>
+        </div>
+        <div class="filter-bar">
+          <button class="filter-tab active" data-category="all">ALL</button>
+          <button class="filter-tab" data-category="Technology">TECH</button>
+          <button class="filter-tab" data-category="Business">BIZ</button>
+          <button class="filter-tab" data-category="World Affairs">WORLD</button>
+          <button class="filter-tab" data-category="Science">SCI</button>
+        </div>
+        <div class="scroll-container" id="news-list">
+          <div class="loading-placeholder">
+            <i class="fa-solid fa-circle-notch fa-spin"></i> Ingesting global news seeds...
+          </div>
+        </div>
+      </section>
+
+      <!-- MIDDLE COLUMN: Post Preview, Editor & Publishing Queue -->
+      <section class="panel-column center-col">
+        <div class="panel-header">
+          <h2><i class="fa-solid fa-pen-to-square"></i> ACTIVE POST EDITOR & PREVIEW</h2>
+        </div>
+        
+        <!-- Post Workspace (Hidden initially, shown when post is clicked) -->
+        <div id="post-editor-workspace" class="editor-workspace" style="display: none;">
+          <!-- SVG Visual Preview Container -->
+          <div class="preview-container">
+            <div class="preview-tabs">
+              <button class="preview-tab active" id="view-svg-tab">VECTOR (SHARP)</button>
+              <button class="preview-tab" id="view-png-tab">PNG RENDER</button>
+            </div>
+            <div class="visual-wrapper">
+              <div id="svg-preview-frame"></div>
+              <img id="png-preview-frame" style="display: none;" src="" alt="PNG Post Preview">
+            </div>
+          </div>
+
+          <!-- Edit Fields Form -->
+          <div class="editor-form">
+            <div class="form-group">
+              <label for="edit-headline">DISPLAY HEADLINE (Re-renders Image)</label>
+              <input type="text" id="edit-headline" placeholder="Headline text...">
+            </div>
+            <div class="form-group">
+              <label for="edit-description">CONTEXT SUBTITLE</label>
+              <textarea id="edit-description" rows="2" placeholder="One-sentence description..."></textarea>
+            </div>
+            <div class="form-group-row">
+              <div class="form-group">
+                <label for="edit-caption">INSTAGRAM CAPTION</label>
+                <textarea id="edit-caption" rows="6" placeholder="Caption copy..."></textarea>
+              </div>
+              <div class="form-group">
+                <label for="edit-hashtags">HASHTAG ENGINE</label>
+                <textarea id="edit-hashtags" rows="6" placeholder="#hashtags..."></textarea>
+              </div>
+            </div>
+            <div class="editor-actions">
+              <button class="btn btn-success" id="btn-save-post">
+                <i class="fa-solid fa-floppy-disk"></i> SAVE & RE-RENDER GRAPHICS
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div id="editor-empty-state" class="empty-state">
+          <i class="fa-solid fa-wand-magic-sparkles"></i>
+          <h3>Visual Composer</h3>
+          <p>Select any verified story from the left feed to preview the generated Instagram graphic, modify captions, or trigger manual publishing.</p>
+        </div>
+
+        <!-- Publishing Queue Section -->
+        <div class="queue-panel">
+          <div class="panel-header">
+            <h3><i class="fa-solid fa-clock"></i> PUBLISHING QUEUE (07:00 PM DAILY)</h3>
+            <button class="btn btn-sm btn-outline-primary" id="btn-publish-queue">PUBLISH PENDING NOW</button>
+          </div>
+          <div class="queue-list" id="queue-container">
+            <div class="loading-placeholder">Queue empty. Ingest news first.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- RIGHT COLUMN: Analytics, Logs & AI Optimization -->
+      <section class="panel-column right-col">
+        
+        <!-- Live Analytics Panel -->
+        <div class="analytics-panel">
+          <div class="panel-header">
+            <h2><i class="fa-solid fa-chart-line"></i> PERFORMANCE ANALYTICS</h2>
+          </div>
+          <div class="metrics-grid">
+            <div class="metric-card">
+              <span class="metric-title">TOTAL REACH</span>
+              <span class="metric-val" id="metric-reach">0</span>
+              <span class="metric-trend"><i class="fa-solid fa-chevron-up"></i> +12%</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-title">ENGAGEMENT ER</span>
+              <span class="metric-val" id="metric-er">0.0%</span>
+              <span class="metric-trend"><i class="fa-solid fa-chevron-up"></i> +4.5%</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-title">TOTAL SAVES</span>
+              <span class="metric-val" id="metric-saves">0</span>
+              <span class="metric-trend"><i class="fa-solid fa-chevron-up"></i> +8.1%</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-title">TOTAL SHARES</span>
+              <span class="metric-val" id="metric-shares">0</span>
+              <span class="metric-trend"><i class="fa-solid fa-chevron-up"></i> +15.2%</span>
+            </div>
+          </div>
+          
+          <div class="chart-container">
+            <canvas id="analytics-chart"></canvas>
+          </div>
+        </div>
+
+        <!-- AI Self-Optimization panel -->
+        <div class="ai-panel">
+          <div class="panel-header">
+            <h3><i class="fa-solid fa-brain"></i> AI SELF-OPTIMIZATION RECOMMENDATIONS</h3>
+          </div>
+          <div class="recommendations-list" id="recommendations-container">
+            <div class="rec-item">
+              <i class="fa-solid fa-circle-info text-info"></i>
+              <span>Ingest posts to calculate weights.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Live Terminal logs -->
+        <div class="terminal-panel">
+          <div class="panel-header">
+            <h3><i class="fa-solid fa-terminal"></i> LIVE AGENT LOGS</h3>
+            <button class="btn-clear" id="btn-clear-logs"><i class="fa-solid fa-trash-can"></i></button>
+          </div>
+          <div class="terminal-body" id="terminal-log-viewer">
+            <div class="terminal-line system-line">[SYSTEM] Terminal initialized. Waiting for pipeline...</div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+  
+  <script src="/main.js"></script>
+</body>
+</html>

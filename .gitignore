@@ -1,0 +1,18 @@
+# Dependency directories
+node_modules/
+
+# Local env files
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Project database files & dynamically generated data (ignore state files, keep database folder)
+database/*.json
+database/temp_*
+!database/.gitkeep
+
+# Dynamically generated assets (ignore generated images, keep assets folder)
+public/assets/post_*
+!public/assets/.gitkeep

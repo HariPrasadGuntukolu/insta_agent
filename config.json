@@ -1,0 +1,54 @@
+{
+  "news_sources": {
+    "rss_feeds": [
+      { "name": "Reuters World", "url": "https://www.reutersagency.com/feed/?best-topics=world-news" },
+      { "name": "BBC News World", "url": "https://feeds.bbci.co.uk/news/world/rss.xml" },
+      { "name": "CNN Top Stories", "url": "http://rss.cnn.com/rss/edition.rss" },
+      { "name": "CNBC Tech", "url": "https://search.cnbc.com/rs/search/combinedfeed.shtml?partnerId=140&view=xml&symbol=TECH" }
+    ],
+    "google_trends_fallback": true
+  },
+  "pipeline_schedule": {
+    "news_collect_time": "06:00",
+    "publish_time": "19:00"
+  },
+  "verification": {
+    "confidence_threshold": 95,
+    "min_sources_required": 3,
+    "blacklist_words": ["rumor", "leak", "allegedly", "speculation", "clickbait", "exclusive rumor", "unconfirmed"]
+  },
+  "scoring_weights": {
+    "global_impact": 0.20,
+    "public_interest": 0.15,
+    "virality_potential": 0.15,
+    "search_demand": 0.10,
+    "social_mentions": 0.10,
+    "business_relevance": 0.10,
+    "technology_relevance": 0.05,
+    "creator_interest": 0.05,
+    "general_engagement": 0.10
+  },
+  "content_mix": {
+    "total_daily_posts": 10,
+    "categories": {
+      "Technology": 2,
+      "Business": 2,
+      "World Affairs": 2,
+      "Science": 1,
+      "Entertainment": 1,
+      "Sports": 1,
+      "Viral Internet": 1
+    }
+  },
+  "post_design": {
+    "width": 1080,
+    "height": 1350,
+    "brand_name": "GVN",
+    "brand_full_name": "GLOBAL VIRAL NEWS",
+    "themes": ["classic", "neon_cyber", "minimalist_editorial"]
+  },
+  "retry_settings": {
+    "max_retries": 3,
+    "backoff_factor_ms": 5000
+  }
+}

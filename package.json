@@ -1,0 +1,20 @@
+{
+  "name": "global-viral-news-agent",
+  "version": "1.0.0",
+  "description": "Fully autonomous AI-powered Global News Media Automation System",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test_pipeline.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "node-cron": "^3.0.3",
+    "rss-parser": "^3.13.0",
+    "sharp": "^0.33.5",
+    "ws": "^8.18.0"
+  }
+}
