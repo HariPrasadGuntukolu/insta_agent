@@ -230,7 +230,7 @@ async function fetchQueue() {
     }
 
     let html = "";
-    queue.slice(-5).forEach(item => {
+    queue.forEach(item => {
       const pubDate = new Date(item.scheduledTime);
       const timeStr = pubDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       
