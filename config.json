@@ -1,10 +1,22 @@
 {
   "news_sources": {
     "rss_feeds": [
-      { "name": "Reuters World", "url": "https://www.reutersagency.com/feed/?best-topics=world-news" },
-      { "name": "BBC News World", "url": "https://feeds.bbci.co.uk/news/world/rss.xml" },
-      { "name": "CNN Top Stories", "url": "http://rss.cnn.com/rss/edition.rss" },
-      { "name": "CNBC Tech", "url": "https://search.cnbc.com/rs/search/combinedfeed.shtml?partnerId=140&view=xml&symbol=TECH" }
+      {
+        "name": "Reuters World",
+        "url": "https://www.reutersagency.com/feed/?best-topics=world-news"
+      },
+      {
+        "name": "BBC News World",
+        "url": "https://feeds.bbci.co.uk/news/world/rss.xml"
+      },
+      {
+        "name": "CNN Top Stories",
+        "url": "http://rss.cnn.com/rss/edition.rss"
+      },
+      {
+        "name": "CNBC Tech",
+        "url": "https://search.cnbc.com/rs/search/combinedfeed.shtml?partnerId=140&view=xml&symbol=TECH"
+      }
     ],
     "google_trends_fallback": true
   },
@@ -15,7 +27,15 @@
   "verification": {
     "confidence_threshold": 95,
     "min_sources_required": 3,
-    "blacklist_words": ["rumor", "leak", "allegedly", "speculation", "clickbait", "exclusive rumor", "unconfirmed"]
+    "blacklist_words": [
+      "rumor",
+      "leak",
+      "allegedly",
+      "speculation",
+      "clickbait",
+      "exclusive rumor",
+      "unconfirmed"
+    ]
   },
   "scoring_weights": {
     "global_impact": 0.20,
@@ -45,7 +65,11 @@
     "height": 1350,
     "brand_name": "GVN",
     "brand_full_name": "GLOBAL VIRAL NEWS",
-    "themes": ["classic", "neon_cyber", "minimalist_editorial"]
+    "themes": [
+      "classic",
+      "neon_cyber",
+      "minimalist_editorial"
+    ]
   },
   "retry_settings": {
     "max_retries": 3,
