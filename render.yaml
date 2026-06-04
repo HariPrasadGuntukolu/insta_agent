@@ -20,3 +20,6 @@ services:
         sync: false # Set in the Render Dashboard
       - key: SERVER_PUBLIC_URL
         sync: false # Set in the Render Dashboard (your Render service URL)
+      - key: TZ
+        value: Asia/Kolkata
+
