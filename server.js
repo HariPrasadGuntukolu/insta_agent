@@ -150,10 +150,15 @@ async function runDailyPipeline() {
       const story = top10[i];
       logSystem("info", `Processing story [${i+1}/10]: "${story.title}"`);
 
-      // Write caption & hashtags
+      // Write caption, hashtags & comprehensive summary
       const copy = await copywriter.generateCaptionAndHashtags(story, (m) => logSystem("info", m));
+      
+      // Perform automated post-generation validation on the summary
+      const validation = await copywriter.verifySummary(story, copy.summary, (m) => logSystem("info", m));
+      
       const postWithCopy = {
         ...story,
+        description: validation.summary,
         caption: copy.caption,
         hashtags: copy.hashtags,
         status: "scheduled"
@@ -401,6 +406,12 @@ app.post('/api/posts/edit', async (req, res) => {
 
   // Re-generate SVG and PNG image assets because title/desc changed
   try {
+    // Validate manual edits against news quality standards
+    if (description) {
+      const validation = await copywriter.verifySummary(posts[idx], posts[idx].description, (m) => logSystem("info", m));
+      posts[idx].description = validation.summary;
+    }
+
     const assets = await postGenerator.createPost(posts[idx]);
     posts[idx].svgPath = assets.svgPath;
     posts[idx].pngPath = assets.pngPath;

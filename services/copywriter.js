@@ -29,9 +29,8 @@ class Copywriter {
         const result = await this.model.generateContent(prompt);
         const text = result.response.text();
 
-        // Extract caption and hashtags from Gemini response
-        // Usually, the response contains both. We will sanitize it.
-        const parsed = this.parseAIResponse(text);
+        // Extract summary, caption and hashtags from Gemini response
+        const parsed = this.parseAIResponse(text, story);
         if (parsed.caption && parsed.hashtags) {
           logger("[Copywriter] AI Caption generation successful.");
           return parsed;
@@ -49,64 +48,90 @@ class Copywriter {
   // Create prompt instruction for Gemini
   buildPrompt(story) {
     return `
-You are the Lead Editor and Head Copywriter for a premium global news digital media network, similar to Reuters, Bloomberg, Morning Brew, and Visual Capitalist.
-Your task is to write a high-engagement, authoritative, and viral Instagram caption for the following news story:
+You are the Lead Editor and Head Copywriter for a premium global news digital media network, similar to Reuters, Bloomberg, and The Economist.
 
+Your task is to analyze the following news story and output a JSON object containing a comprehensive news summary, an Instagram caption, and hashtags.
+
+NEWS STORY SOURCE DATA:
 HEADLINE: ${story.title}
 SUMMARY: ${story.description}
 CATEGORY: ${story.category}
 SOURCE: ${story.source}
-ENGAGEMENT INDEX: ${story.viralScore}/100
 
-You must format your output EXACTLY as follows, using clear sections, formatting with emojis, and clean spacing. Do not include markdown headers like '### Hook' in the output itself, just output the clean text:
+INSTRUCTIONS:
 
-1. [OPENING HOOK] — A short, high-impact headline hook in capital letters with an alert emoji.
-2. [STORY SUMMARY] — 2-3 engaging, concise sentences summarizing the news and the facts.
-3. [KEY INSIGHT] — 1 bullet point starting with 💡 explaining a critical data point or detail.
-4. [WHY IT MATTERS] — 1 bullet point starting with 🌍 explaining the broader global, market, or industry impact.
-5. [DISCUSSION PROMPT] — An open-ended, engagement-optimized question asking for the audience's opinion.
-6. [CALL TO ACTIONS] — Clean CTAs encouraging Saves, Shares, and Follows:
-   - "📌 Save this update for later."
-   - "✈️ Share with someone who should know."
-   - "👉 Follow @GlobalViralNews for real-time autonomous updates."
-7. [HASHTAGS] — An aligned list of 25 hashtags separated by spaces (exactly 5 broad hashtags, 10 niche hashtags related to the topic/category, and 10 trending hashtags).
+1. COMPREHENSIVE SUMMARY ("summary" field in JSON):
+- Write a highly readable, factual, and objective news summary of 2-4 sentences.
+- It MUST provide complete context so the reader can understand the entire event without clicking an external link.
+- Answer: What happened, Who is involved, Where, When, Why it is important, and Key outcomes/implications.
+- Avoid vague, incomplete, or clickbait statements.
+- Write in clear, professional language.
+- Keep it under 280 characters to fit the design, but prioritize factual completeness.
 
-Example Output Format:
-🚨 BREAKING: [Hook]
-[Summary text...]
+2. INSTAGRAM CAPTION ("caption" field in JSON):
+- Write an engaging, authoritative Instagram caption.
+- Format with clear spacing and emojis.
+- Include:
+  * An opening hook in capital letters.
+  * A 2-sentence summary.
+  * A bullet point for "💡 KEY DETAIL".
+  * A bullet point for "🌍 GLOBAL IMPACT".
+  * An engagement question asking for the audience's view.
+  * Clean CTAs for Saves, Shares, and Follows.
+- Do not include hashtags here.
 
-💡 KEY INSIGHT: [Insight...]
-🌍 WHY IT MATTERS: [Impact...]
+3. HASHTAGS ("hashtags" field in JSON):
+- Provide a single line of exactly 25 hashtags separated by spaces (5 broad, 10 topic-specific, 10 trending).
 
-💬 [Question]? Let us know below!
-
-📌 Save this update for later.
-✈️ Share with someone who should know.
-👉 Follow @GlobalViralNews for real-time autonomous updates.
-
-#news #business #tech ... [exactly 25 hashtags]
+Return ONLY a valid JSON object in this format (no conversational text before or after):
+{
+  "summary": "A comprehensive, factual news summary here...",
+  "caption": "🚨 BREAKING: [Hook]\\n\\n[Caption details...]\\n\\n💬 [Question]? Let us know below!\\n\\n📌 Save this update for later.\\n✈️ Share with someone who should know.\\n👉 Follow @GlobalViralNews for updates.",
+  "hashtags": "#news #business #tech ..."
+}
 `;
   }
 
   // Parse response from LLM
-  parseAIResponse(text) {
+  parseAIResponse(text, story) {
+    let cleaned = text.trim();
+    if (cleaned.startsWith("```")) {
+      cleaned = cleaned.replace(/^```(json)?/, "").replace(/```$/, "").trim();
+    }
+
+    try {
+      const parsed = JSON.parse(cleaned);
+      if (parsed.summary && parsed.caption && parsed.hashtags) {
+        return {
+          summary: parsed.summary.trim(),
+          caption: parsed.caption.trim(),
+          hashtags: parsed.hashtags.trim()
+        };
+      }
+    } catch (e) {
+      console.warn("[Copywriter] JSON parsing failed, trying line-based parser.", e.message);
+    }
+
+    // Fallback line-based parsing
     const lines = text.split('\n');
     const hashtagLineIndex = lines.findIndex(l => l.includes('#'));
-    
-    let caption = "";
+    let caption = text;
     let hashtags = "";
 
     if (hashtagLineIndex !== -1) {
       caption = lines.slice(0, hashtagLineIndex).join('\n').trim();
       hashtags = lines.slice(hashtagLineIndex).join(' ').trim();
     } else {
-      // If no hashtags line found, try splitting by '#'
       const parts = text.split('#');
       caption = parts[0].trim();
       hashtags = parts.slice(1).map(p => '#' + p.trim()).join(' ');
     }
 
-    return { caption, hashtags };
+    return {
+      summary: story ? story.description : "",
+      caption,
+      hashtags: hashtags || "#news"
+    };
   }
 
   // Template-based generator
@@ -164,7 +189,7 @@ ${description}
     // Formulate Hashtags
     const hashtags = this.getCategoryHashtags(category);
 
-    return { caption, hashtags };
+    return { summary: description, caption, hashtags };
   }
 
   // Get pre-defined optimal hashtags for each category
@@ -203,7 +228,7 @@ ${description}
         "#f1news", "#espn", "#athleticrecords", "#matchday", "#victory"
       ],
       "Viral Internet": [
-        "#internet culture", "#memes", "#viralmemes", "#tiktoktrends", "#creatoreconomy",
+        "#internetculture", "#memes", "#viralmemes", "#tiktoktrends", "#creatoreconomy",
         "#socialmedia", "#onlinecommunities", "#consumertrends", "#chillguy", "#trendingmemes",
         "#viralvideo", "#internetculture", "#digitaltrends", "#contentcreator", "#webculture"
       ]
@@ -219,6 +244,58 @@ ${description}
 
     // Combine them and ensure a clean string
     return [...broad, ...specific.slice(0, 10), ...trending].join(' ');
+  }
+
+  // Verify the news summary meets quality standards
+  async verifySummary(story, summary, logger = console.log) {
+    if (!this.aiEnabled) {
+      logger("[Copywriter] AI disabled. Skipping news card validation.");
+      return { success: true, summary };
+    }
+
+    try {
+      logger(`[Copywriter] Validating news card summary quality...`);
+      const prompt = `
+You are a Senior News Editor and Fact Checker.
+Analyze the following source news material and the generated news summary.
+
+SOURCE HEADLINE: ${story.title}
+SOURCE DESCRIPTION: ${story.description}
+
+GENERATED SUMMARY: ${summary}
+
+Verify that the generated summary meets these quality standards:
+1. It does NOT omit critical facts.
+2. The reader can understand the complete story from the summary alone.
+3. It accurately represents the source material.
+4. No misleading or incomplete information is presented.
+5. The content is concise, factual, and professional.
+
+Return ONLY a valid JSON object in this format (no conversational text before or after):
+{
+  "passed": true/false,
+  "explanation": "Brief explanation of any issues found",
+  "revised_summary": "If passed is false, provide a corrected, complete, and factual news summary that passes all criteria."
+}
+`;
+      const result = await this.model.generateContent(prompt);
+      let text = result.response.text().trim();
+      if (text.startsWith("```")) {
+        text = text.replace(/^```(json)?/, "").replace(/```$/, "").trim();
+      }
+      const parsed = JSON.parse(text);
+      if (parsed.passed) {
+        logger("[Copywriter] [Passed] Summary validation succeeded.");
+        return { success: true, summary };
+      } else {
+        logger(`[Copywriter] [Failed] Summary validation failed: ${parsed.explanation}`);
+        logger(`[Copywriter] Using revised summary: "${parsed.revised_summary}"`);
+        return { success: false, summary: parsed.revised_summary || summary };
+      }
+    } catch (e) {
+      logger(`[Copywriter] [Warning] Summary validation failed: ${e.message}. Proceeding with generated summary.`);
+      return { success: true, summary };
+    }
   }
 }
 

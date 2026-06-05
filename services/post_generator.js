@@ -11,8 +11,8 @@ sharp.cache(false);
 class PostGenerator {
   constructor(configPath) {
     const configData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    this.width = configData.post_design.width || 1080;
-    this.height = configData.post_design.height || 1350;
+    this.width = 1080;
+    this.height = 1080;
     this.brandName = configData.post_design.brand_name || "GVN";
     this.brandFullName = configData.post_design.brand_full_name || "GLOBAL VIRAL NEWS";
     this.assetsDir = path.join(__dirname, '../public/assets');
@@ -20,6 +20,14 @@ class PostGenerator {
     // Ensure assets directory exists
     if (!fs.existsSync(this.assetsDir)) {
       fs.mkdirSync(this.assetsDir, { recursive: true });
+    }
+
+    // Load logo file as base64
+    const logoPath = path.join(this.assetsDir, 'logo.png');
+    if (fs.existsSync(logoPath)) {
+      this.logoBase64 = `data:image/png;base64,${fs.readFileSync(logoPath).toString('base64')}`;
+    } else {
+      this.logoBase64 = null;
     }
   }
 
@@ -128,10 +136,10 @@ class PostGenerator {
     return filtered.slice(0, 3).join(' ');
   }
 
-  // Fetch relevant image URL from Wikipedia Commons (deep search)
-  fetchWikiImage(query) {
+  // Fetch up to limit relevant image URLs from Wikipedia Commons (deep search)
+  fetchWikiImages(query, limit = 3) {
     return new Promise((resolve) => {
-      const apiUrl = `https://en.wikipedia.org/w/api.php?action=query&format=json&prop=pageimages&generator=search&piprop=original&gsrsearch=${encodeURIComponent(query)}&gsrlimit=10`;
+      const apiUrl = `https://en.wikipedia.org/w/api.php?action=query&format=json&prop=pageimages&generator=search&piprop=original&gsrsearch=${encodeURIComponent(query)}&gsrlimit=15`;
       
       const req = https.get(apiUrl, {
         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
@@ -141,32 +149,32 @@ class PostGenerator {
         res.on('end', () => {
           try {
             const data = JSON.parse(body);
+            const imageUrls = [];
             if (data.query && data.query.pages) {
               const pages = data.query.pages;
-              // Iterate through search results in order and return the first valid non-SVG image
               for (const pageId in pages) {
                 const page = pages[pageId];
                 if (page.original && page.original.source) {
                   const src = page.original.source;
                   const isSvg = src.toLowerCase().endsWith('.svg');
-                  if (!isSvg) {
-                    resolve(src);
-                    return;
+                  if (!isSvg && !imageUrls.includes(src)) {
+                    imageUrls.push(src);
+                    if (imageUrls.length >= limit) break;
                   }
                 }
               }
             }
-            resolve(null);
+            resolve(imageUrls);
           } catch (e) {
-            resolve(null);
+            resolve([]);
           }
         });
       });
       
-      req.on('error', () => resolve(null));
+      req.on('error', () => resolve([]));
       req.setTimeout(4000, () => {
         req.destroy();
-        resolve(null);
+        resolve([]);
       });
     });
   }
@@ -215,180 +223,254 @@ class PostGenerator {
     });
   }
 
-  // Retrieve base64 image data URI for the story
-  async getBase64Image(story) {
-    const keywords = this.extractKeywords(story.title);
+  // Intelligently evaluate multiple images and select the single best one
+  evaluateAndSelectImage(imageUrls, keywords) {
+    if (imageUrls.length === 0) return null;
+    if (imageUrls.length === 1) return imageUrls[0];
     
-    let imageUrl = await this.fetchWikiImage(keywords);
-    if (imageUrl) {
-      console.log(`[PostGenerator] Found Wiki image for keywords "${keywords}": ${imageUrl}`);
-    } else {
-      // Fallback to Lorem Flickr: individual tags must be sanitised of spaces and non-alphanumeric chars
-      const queryTags = keywords.split(/\s+/)
-        .concat(story.category.split(/\s+/))
-        .map(t => t.replace(/[^\w]/g, ''))
-        .filter(t => t.length > 0)
-        .map(t => encodeURIComponent(t))
-        .join(',');
+    let bestUrl = imageUrls[0];
+    let maxScore = -1;
+    const keywordArr = keywords.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    
+    for (const urlStr of imageUrls) {
+      let score = 0;
+      const urlLower = urlStr.toLowerCase();
       
-      imageUrl = `https://loremflickr.com/920/520/${queryTags}`;
-      console.log(`[PostGenerator] Using Lorem Flickr image for keywords "${keywords}": ${imageUrl}`);
+      // Match keywords in URL filename
+      for (const keyword of keywordArr) {
+        if (urlLower.includes(keyword)) {
+          score += 2;
+        }
+      }
+      
+      // Prefer standard photo extensions (JPEGs) over PNG graphics/logos
+      if (urlLower.endsWith('.jpg') || urlLower.endsWith('.jpeg')) {
+        score += 1;
+      }
+      
+      if (score > maxScore) {
+        maxScore = score;
+        bestUrl = urlStr;
+      }
     }
     
-    const tempPath = path.join(__dirname, `../database/temp_${story.id}.jpg`);
+    return bestUrl;
+  }
+
+  // Retrieve base64 image data URI for the single hero image
+  async getBase64Images(story) {
+    const keywords = this.extractKeywords(story.title);
+    let imageUrls = await this.fetchWikiImages(keywords, 3);
+    
+    if (imageUrls.length === 0) {
+      imageUrls = await this.fetchWikiImages(story.category, 2);
+    }
+    
+    // STRICT REQUIREMENT: No generic stock photos, unrelated visuals or Lorem Flickr placeholders
+    if (imageUrls.length === 0) {
+      console.log(`[PostGenerator] No relevant Wikipedia images found for "${keywords}". Falling back to typography-driven news card.`);
+      return [];
+    }
+
+    // Intelligently evaluate and select the single best image representation
+    const selectedUrl = this.evaluateAndSelectImage(imageUrls, keywords);
+    console.log(`[PostGenerator] Selected single hero image for "${keywords}": ${selectedUrl}`);
+
+    const tempPath = path.join(__dirname, `../database/temp_${story.id}_0.jpg`);
     try {
-      await this.downloadImage(imageUrl, tempPath);
+      await this.downloadImage(selectedUrl, tempPath);
       
-      // Optimize memory: Resize the downloaded image to target dimensions (920x520) and compress to JPEG
-      // before converting to base64. This prevents raw 10MB+ images from crashing the 512MB RAM container.
+      // Resize to fixed hero dimensions: 960x420
       const resizedBuffer = await sharp(tempPath)
-        .resize(920, 520, { fit: 'cover' })
+        .resize(960, 420, { fit: 'cover' })
         .jpeg({ quality: 80 })
         .toBuffer();
         
       fs.unlinkSync(tempPath); // cleanup
-      return `data:image/jpeg;base64,${resizedBuffer.toString('base64')}`;
+      return [`data:image/jpeg;base64,${resizedBuffer.toString('base64')}`];
     } catch (err) {
-      console.warn(`[PostGenerator] [Warning] Failed to fetch image: ${err.message}. Using gradient fallback.`);
+      console.warn(`[PostGenerator] [Warning] Failed to fetch image (${selectedUrl}): ${err.message}`);
       if (fs.existsSync(tempPath)) {
         try { fs.unlinkSync(tempPath); } catch (e) {}
       }
-      return null;
+      return [];
     }
   }
 
   // Generate the raw SVG string for a story
-  generateSVG(story, base64Image) {
+  generateSVG(story, base64Images = []) {
     const theme = this.getCategoryTheme(story.category);
     
-    // Wrap headline (approx 25 chars per line, max 3 lines)
-    const rawHeadlineLines = this.wrapText(story.title || "", 26).slice(0, 3);
+    // Wrap headline (approx 30 chars per line, max 3 lines)
+    const rawHeadlineLines = this.wrapText(story.title || "", 30).slice(0, 3);
     const headlineLines = rawHeadlineLines.map(line => this.escapeXml(line));
     
-    // Wrap supporting text (approx 55 chars per line, max 3 lines)
-    const rawContextLines = this.wrapText(story.description || "", 55).slice(0, 3);
-    const contextLines = rawContextLines.map(line => this.escapeXml(line));
-    
     // Escape brand names, category and source
-    const escBrandName = this.escapeXml(this.brandName);
     const escBrandFullName = this.escapeXml(this.brandFullName);
     const escCategory = this.escapeXml(story.category || "General");
     const escSource = this.escapeXml(story.source || "Unknown");
-    const escId = this.escapeXml((story.id || "").substring(0, 12).toUpperCase());
 
-    const contextLineHeight = 34;
+    const headlineFontSize = 38;
+    const headlineLineHeight = 48;
+
+    const imagePresent = base64Images && base64Images.length > 0;
+    const imageHeight = 420;
+
+    // Fixed layout grid Y coordinates (1080x1080)
+    const yHeadline = 160;
+    const yImage = 300;
+    const ySummary = 750;
+
+    // Wrap news summary / description and dynamically adjust size to fit Y=750 to Y=950 (200px limit)
+    let summaryFontSize = 18;
+    let summaryLineHeight = 28;
+    let summaryMaxChars = 75;
+    let rawSummaryLines = [];
+    let summaryLines = [];
+
+    if (imagePresent) {
+      // Find the largest font size (up to 19) that fits in the 200px vertical space
+      for (const fsSize of [19, 18, 17, 16, 15, 14]) {
+        summaryFontSize = fsSize;
+        summaryLineHeight = fsSize + 10;
+        summaryMaxChars = fsSize === 19 ? 72 : (fsSize === 18 ? 75 : (fsSize === 17 ? 80 : (fsSize === 16 ? 85 : 90)));
+        rawSummaryLines = this.wrapText(story.description || "", summaryMaxChars);
+        const tempHeight = rawSummaryLines.length * summaryLineHeight;
+        if (tempHeight <= 200) {
+          break;
+        }
+      }
+      summaryLines = rawSummaryLines.map(line => this.escapeXml(line));
+    } else {
+      // Fallback layout card sizing inside the same Y=300 to Y=720 card
+      let fallbackFontSize = 23;
+      let fallbackLineHeight = 35;
+      let fallbackMaxChars = 60;
+      
+      for (const fsSize of [25, 24, 23, 22, 20, 18]) {
+        fallbackFontSize = fsSize;
+        fallbackLineHeight = fsSize + 12;
+        fallbackMaxChars = fsSize === 25 ? 56 : (fsSize === 24 ? 58 : 60);
+        rawSummaryLines = this.wrapText(story.description || "", fallbackMaxChars);
+        const tempHeight = rawSummaryLines.length * fallbackLineHeight;
+        if (tempHeight <= 320) { // Fits inside the 420px height card with padding
+          break;
+        }
+      }
+      summaryLines = rawSummaryLines.map(line => this.escapeXml(line));
+      summaryFontSize = fallbackFontSize;
+      summaryLineHeight = fallbackLineHeight;
+    }
+
+    // Formulate SVG Collage / Fallback section
+    let imageSection = "";
+    if (imagePresent) {
+      imageSection = `
+        <!-- Single Hero Image -->
+        <image href="${base64Images[0]}" x="60" y="${yImage}" width="960" height="${imageHeight}" preserveAspectRatio="xMidYMid slice" clip-path="url(#imageClip)" />
+        <rect x="60" y="${yImage}" width="960" height="${imageHeight}" fill="none" stroke="${theme.color}" stroke-opacity="0.25" stroke-width="1.5" rx="16" />
+      `;
+    } else {
+      // Premium typography-focused layout fallback card when no relevant image is found
+      imageSection = `
+        <!-- Typography Glassmorphic Card -->
+        <rect x="60" y="${yImage}" width="960" height="${imageHeight}" fill="url(#glassGrad)" stroke="${theme.color}" stroke-opacity="0.2" stroke-width="1.5" rx="20" />
+        
+        <!-- Large Quote Icon -->
+        <text x="100" y="${yImage + 100}" font-family="'Outfit', system-ui, sans-serif" font-size="120" font-weight="900" fill="${theme.color}" fill-opacity="0.12">“</text>
+        
+        <!-- Center align summary contents inside card -->
+        <g transform="translate(110, ${yImage + 130})">
+          ${summaryLines.map((line, idx) => `
+            <text y="${idx * summaryLineHeight}" font-family="'Inter', system-ui, sans-serif" font-size="${summaryFontSize}" font-weight="500" fill="#e2e8f0" line-height="1.6">${line}</text>
+          `).join('')}
+        </g>
+      `;
+    }
 
     return `
-    <svg width="${this.width}" height="${this.height}" viewBox="0 0 1080 1350" xmlns="http://www.w3.org/2000/svg">
+    <svg width="${this.width}" height="${this.height}" viewBox="0 0 1080 1080" xmlns="http://www.w3.org/2000/svg">
       <defs>
+        <!-- Style for fonts -->
+        <style>
+          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Outfit:wght@800;900&amp;display=swap');
+        </style>
+
         <!-- Gradient Background -->
         <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
           <stop offset="0%" stop-color="${theme.bgStart}" />
           <stop offset="100%" stop-color="${theme.bgEnd}" />
         </linearGradient>
         
-        <!-- Fallback Gradient -->
-        <linearGradient id="fallbackGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="${theme.bgStart}" />
-          <stop offset="50%" stop-color="${theme.color}" stop-opacity="0.3" />
-          <stop offset="100%" stop-color="${theme.bgEnd}" />
-        </linearGradient>
-
         <!-- Glassmorphism Gradient -->
         <linearGradient id="glassGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stop-color="#ffffff" stop-opacity="0.07" />
-          <stop offset="100%" stop-color="#ffffff" stop-opacity="0.02" />
+          <stop offset="0%" stop-color="#ffffff" stop-opacity="0.06" />
+          <stop offset="100%" stop-color="#ffffff" stop-opacity="0.01" />
         </linearGradient>
 
-        <!-- Outer Glow Filter -->
-        <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-          <feGaussianBlur stdDeviation="12" result="blur" />
-          <feComposite in="SourceGraphic" in2="blur" operator="over" />
-        </filter>
-        <filter id="subtleGlow" x="-10%" y="-10%" width="120%" height="120%">
-          <feGaussianBlur stdDeviation="6" result="blur" />
-          <feComposite in="SourceGraphic" in2="blur" operator="over" />
-        </filter>
+        <!-- Clipping paths for single hero image -->
+        <clipPath id="imageClip">
+          <rect x="60" y="${yImage}" width="960" height="${imageHeight}" rx="16" />
+        </clipPath>
       </defs>
 
       <!-- 1. Background Grid -->
-      <rect width="1080" height="1350" fill="url(#bgGrad)" />
+      <rect width="1080" height="1080" fill="url(#bgGrad)" />
       
       <!-- Tech Grid Pattern -->
       <g stroke="#ffffff" stroke-opacity="0.01" stroke-width="1">
-        <path d="M 0,135 L 1080,135 M 0,270 L 1080,270 M 0,405 L 1080,405 M 0,540 L 1080,540 M 0,675 L 1080,675 M 0,810 L 1080,810 M 0,945 L 1080,945 M 0,1080 L 1080,1080 M 0,1215 L 1080,1215" />
-        <path d="M 108,0 L 108,1350 M 216,0 L 216,1350 M 324,0 L 324,1350 M 432,0 L 432,1350 M 540,0 L 540,1350 M 648,0 L 648,1350 M 756,0 L 756,1350 M 864,0 L 864,1350 M 972,0 L 972,1350" />
+        <path d="M 0,108 L 1080,108 M 0,216 L 1080,216 M 0,324 L 1080,324 M 0,432 L 1080,432 M 0,540 L 1080,540 M 0,648 L 1080,648 M 0,756 L 1080,756 M 0,864 L 1080,864 M 0,972 L 1080,972" />
+        <path d="M 108,0 L 108,1080 M 216,0 L 216,1080 M 324,0 L 324,1080 M 432,0 L 432,1080 M 540,0 L 540,1080 M 648,0 L 648,1080 M 756,0 L 756,1080 M 864,0 L 864,1080 M 972,0 L 972,1080" />
       </g>
 
       <!-- Sleek Glowing Borders -->
-      <rect x="25" y="25" width="1030" height="1300" fill="none" stroke="${theme.color}" stroke-opacity="0.12" stroke-width="2" rx="16" />
-      <rect x="40" y="40" width="1000" height="1270" fill="none" stroke="#ffffff" stroke-opacity="0.03" stroke-width="1" rx="12" />
+      <rect x="25" y="25" width="1030" height="1030" fill="none" stroke="${theme.color}" stroke-opacity="0.12" stroke-width="2" rx="16" />
+      <rect x="40" y="40" width="1000" height="1000" fill="none" stroke="#ffffff" stroke-opacity="0.03" stroke-width="1" rx="12" />
 
-      <!-- 2. Header: Logo & Identity -->
-      <g transform="translate(80, 85)">
-        <!-- Brand Initials Icon -->
-        <rect width="55" height="55" fill="${theme.color}" fill-opacity="0.1" stroke="${theme.color}" stroke-width="2" rx="8" />
-        <text x="27.5" y="37" font-family="'Outfit', 'Inter', system-ui, sans-serif" font-size="28" font-weight="900" fill="${theme.color}" text-anchor="middle">${escBrandName}</text>
-        
-        <!-- Brand Name Details -->
-        <text x="75" y="26" font-family="'Outfit', 'Inter', system-ui, sans-serif" font-size="22" font-weight="800" fill="#ffffff" letter-spacing="3">${escBrandFullName}</text>
-        <text x="75" y="46" font-family="'Inter', system-ui, sans-serif" font-size="13" font-weight="600" fill="#a0aec0" letter-spacing="2">AUTONOMOUS DIGITAL NETWORK</text>
-      </g>
-
-      <!-- Top Right: Verified Badge -->
-      <g transform="translate(820, 85)">
-        <rect width="180" height="42" fill="#ffffff" fill-opacity="0.05" stroke="#ffffff" stroke-opacity="0.1" stroke-width="1" rx="21" />
-        <circle cx="25" cy="21" r="8" fill="#10B981" />
-        <text x="45" y="26" font-family="'Inter', system-ui, sans-serif" font-size="14" font-weight="700" fill="#ffffff" letter-spacing="1">FACT CHECKED</text>
-      </g>
-
-      <!-- 3. Category Badge -->
-      <g transform="translate(80, 165)">
-        <rect width="180" height="36" fill="${theme.color}" fill-opacity="0.15" stroke="${theme.color}" stroke-opacity="0.4" stroke-width="1" rx="6" />
-        <text x="90" y="23" font-family="'Inter', system-ui, sans-serif" font-size="13" font-weight="900" fill="${theme.color}" letter-spacing="3" text-anchor="middle">${escCategory.toUpperCase()}</text>
-      </g>
-
-      <!-- 4. Headline (Dynamic Lines, Max 3) -->
-      <g transform="translate(80, 245)">
-        ${headlineLines.map((line, idx) => `
-          <text y="${idx * 68}" font-family="'Outfit', 'Inter', system-ui, sans-serif" font-size="52" font-weight="900" fill="#ffffff" letter-spacing="-0.5">${line}</text>
-        `).join('')}
-      </g>
-
-      <!-- 5. Central Visual Panel (Relevant Image or Gorgeous Gradient Fallback) -->
-      <g transform="translate(80, 470)">
-        <clipPath id="imageClip">
-          <rect width="920" height="520" rx="16" />
-        </clipPath>
-        
-        ${base64Image ? `
-          <!-- Image -->
-          <image href="${base64Image}" width="920" height="520" preserveAspectRatio="xMidYMid slice" clip-path="url(#imageClip)" />
+      <!-- 2. Header: Logo & Identity (Optimized for space, removed subtitle) -->
+      <g transform="translate(60, 60)">
+        ${this.logoBase64 ? `
+          <!-- User Logo Image -->
+          <image href="${this.logoBase64}" x="0" y="0" width="55" height="55" />
         ` : `
-          <!-- Fallback Gradient -->
-          <rect width="920" height="520" fill="url(#fallbackGrad)" rx="16" />
-          <circle cx="460" cy="260" r="110" fill="${theme.color}" fill-opacity="0.03" stroke="${theme.color}" stroke-opacity="0.1" stroke-width="1.5" />
-          <text x="460" y="275" font-family="'Outfit', 'Inter', system-ui, sans-serif" font-size="44" font-weight="900" fill="${theme.color}" fill-opacity="0.5" text-anchor="middle">${escCategory.toUpperCase()}</text>
+          <!-- Fallback Logo Icon -->
+          <rect width="55" height="55" fill="${theme.color}" fill-opacity="0.1" stroke="${theme.color}" stroke-width="2" rx="8" />
+          <text x="27.5" y="37" font-family="'Outfit', 'Inter', system-ui, sans-serif" font-size="28" font-weight="900" fill="${theme.color}" text-anchor="middle">${this.escapeXml(this.brandName)}</text>
         `}
         
-        <!-- Glowing border around the image container -->
-        <rect width="920" height="520" fill="none" stroke="${theme.color}" stroke-opacity="0.25" stroke-width="2" rx="16" />
+        <!-- Brand Name Details -->
+        <text x="75" y="36" font-family="'Outfit', 'Inter', system-ui, sans-serif" font-size="24" font-weight="900" fill="#ffffff" letter-spacing="1.5">${escBrandFullName}</text>
       </g>
 
-      <!-- 6. Supporting Text / Description -->
-      <g transform="translate(80, 1030)">
-        ${contextLines.map((line, idx) => `
-          <text y="${idx * contextLineHeight}" font-family="'Inter', system-ui, sans-serif" font-size="22" font-weight="500" fill="#cbd5e1" line-height="1.5">${line}</text>
+      <!-- Top Right: Category Badge -->
+      <g transform="translate(860, 70)">
+        <rect width="160" height="34" fill="${theme.color}" fill-opacity="0.12" stroke="${theme.color}" stroke-opacity="0.3" stroke-width="1" rx="8" />
+        <text x="80" y="21" font-family="'Inter', system-ui, sans-serif" font-size="11" font-weight="900" fill="${theme.color}" letter-spacing="2.5" text-anchor="middle">${escCategory.toUpperCase()}</text>
+      </g>
+
+      <!-- 3. Headline (Fixed Start Y=160, Max 3 Lines) -->
+      <g transform="translate(60, ${yHeadline})">
+        ${headlineLines.map((line, idx) => `
+          <text y="${idx * headlineLineHeight}" font-family="'Outfit', 'Inter', system-ui, sans-serif" font-size="${headlineFontSize}" font-weight="900" fill="#ffffff" letter-spacing="-0.5">${line}</text>
         `).join('')}
       </g>
 
-      <!-- 7. Footer: Brand, Verification, and CTA -->
-      <g transform="translate(80, 1235)">
-        <line x1="0" y1="-35" x2="920" y2="-35" stroke="#ffffff" stroke-opacity="0.08" stroke-width="1.5" />
-        
-        <text x="0" y="5" font-family="'Inter', system-ui, sans-serif" font-size="14" font-weight="700" fill="#94a3b8" fill-opacity="0.4" letter-spacing="1">ID: ${escId}</text>
-        <text x="460" y="5" font-family="'Outfit', 'Inter', system-ui, sans-serif" font-size="15" font-weight="800" fill="${theme.color}" fill-opacity="0.8" letter-spacing="3" text-anchor="middle">AUTONOMOUS GLOBAL MEDIA</text>
-        <text x="920" y="5" font-family="'Inter', system-ui, sans-serif" font-size="14" font-weight="700" fill="#94a3b8" fill-opacity="0.4" letter-spacing="1" text-anchor="end">SOURCE: ${escSource.toUpperCase()}</text>
+      <!-- 4. Hero Visual Panel -->
+      ${imageSection}
+
+      <!-- 5. Supporting Text / News Summary (Rendered below single image if present) -->
+      ${imagePresent ? `
+        <g transform="translate(60, ${ySummary})">
+          ${summaryLines.map((line, idx) => `
+            <text y="${idx * summaryLineHeight}" font-family="'Inter', system-ui, sans-serif" font-size="${summaryFontSize}" font-weight="500" fill="#cbd5e1" line-height="1.5">${line}</text>
+          `).join('')}
+        </g>
+      ` : ''}
+
+      <!-- 6. Footer: Attribution only (Clean space optimized, no ID or daily update labels) -->
+      <g transform="translate(60, 1010)">
+        <line x1="0" y1="-30" x2="960" y2="-30" stroke="#ffffff" stroke-opacity="0.08" stroke-width="1.5" />
+        <text x="960" y="5" font-family="'Inter', system-ui, sans-serif" font-size="12" font-weight="700" fill="#64748b" letter-spacing="1.5" text-anchor="end">SOURCE: ${escSource.toUpperCase()}</text>
       </g>
     </svg>
     `;
@@ -396,11 +478,11 @@ class PostGenerator {
 
   // Create the image and write files
   async createPost(story) {
-    // 1. Fetch relevant image and convert to base64
-    const base64Image = await this.getBase64Image(story);
+    // 1. Fetch relevant images as an array containing the single selected hero image
+    const base64Images = await this.getBase64Images(story);
     
     // 2. Generate SVG content
-    const svgContent = this.generateSVG(story, base64Image);
+    const svgContent = this.generateSVG(story, base64Images);
     const svgPath = path.join(this.assetsDir, `post_${story.id}.svg`);
     const pngPath = path.join(this.assetsDir, `post_${story.id}.png`);
 

@@ -60,8 +60,10 @@ async function testPipeline() {
       console.log(` -> Processing Story [${i+1}/3]: "${story.title}"`);
       
       const copy = await copywriter.generateCaptionAndHashtags(story);
+      const validation = await copywriter.verifySummary(story, copy.summary);
       const postWithCopy = {
         ...story,
+        description: validation.summary,
         caption: copy.caption,
         hashtags: copy.hashtags,
         status: "scheduled"
