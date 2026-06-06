@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GVN — Publishing Queue</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@600;700;800;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body data-page="queue">
+  <div class="system-glow"></div>
+  <div class="app-container">
+    <header class="app-header">
+      <div class="header-brand">
+        <div class="brand-box">GVN</div>
+        <div class="brand-text">
+          <h1>GLOBAL VIRAL NEWS</h1>
+          <span class="sub-logo">PUBLISHING QUEUE</span>
+        </div>
+      </div>
+      <div class="status-bar">
+        <div class="status-item" id="status-mode">
+          <span class="status-label">MODE:</span>
+          <span class="status-value sim-badge">SIMULATION</span>
+        </div>
+        <div class="status-item" id="status-pipeline">
+          <span class="status-label">PIPELINE:</span>
+          <span class="status-value active-badge" id="pipeline-state">IDLE</span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-primary" id="btn-run-pipeline">
+          <i class="fa-solid fa-play"></i> RUN NEWS PIPELINE
+        </button>
+        <button class="btn btn-secondary" onclick="window.location.href='/'">
+          <i class="fa-solid fa-house"></i> DASHBOARD
+        </button>
+        <button class="btn btn-tertiary" onclick="window.location.href='/analytics.html'">
+          <i class="fa-solid fa-chart-column"></i> ANALYTICS
+        </button>
+      </div>
+    </header>
+    <main class="app-workspace page-full">
+      <section class="panel-column">
+        <div class="panel-header">
+          <h2><i class="fa-solid fa-list-check"></i> PUBLISHING QUEUE</h2>
+        </div>
+        <div class="queue-panel">
+          <div class="panel-header">
+            <div>
+              <h3>Queue Dashboard</h3>
+              <span class="panel-subtitle">Live queue view with manual publish controls.</span>
+            </div>
+            <span class="queue-status-label">Queued: <strong id="queue-count">0</strong></span>
+          </div>
+          <div class="queue-list" id="queue-container">
+            <div class="loading-placeholder">Loading publishing queue...</div>
+          </div>
+          <div class="queue-actions-row">
+            <button class="btn btn-sm btn-outline-primary" id="btn-publish-queue">PUBLISH PENDING NOW</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="/main.js"></script>
+</body>
+</html>

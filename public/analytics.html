@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GVN — Performance Analytics</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@600;700;800;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body data-page="analytics">
+  <div class="system-glow"></div>
+  <div class="app-container">
+    <header class="app-header">
+      <div class="header-brand">
+        <div class="brand-box">GVN</div>
+        <div class="brand-text">
+          <h1>GLOBAL VIRAL NEWS</h1>
+          <span class="sub-logo">PERFORMANCE ANALYTICS</span>
+        </div>
+      </div>
+      <div class="status-bar">
+        <div class="status-item" id="status-mode">
+          <span class="status-label">MODE:</span>
+          <span class="status-value sim-badge">SIMULATION</span>
+        </div>
+        <div class="status-item" id="status-pipeline">
+          <span class="status-label">PIPELINE:</span>
+          <span class="status-value active-badge" id="pipeline-state">IDLE</span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-secondary" onclick="window.location.href='/'">
+          <i class="fa-solid fa-house"></i> DASHBOARD
+        </button>
+        <button class="btn btn-secondary" onclick="window.location.href='/queue.html'">
+          <i class="fa-solid fa-list-check"></i> QUEUE
+        </button>
+        <button class="btn btn-primary" id="btn-refresh-analytics">
+          <i class="fa-solid fa-arrows-rotate"></i> REFRESH STATS
+        </button>
+      </div>
+    </header>
+    <main class="app-workspace page-full">
+      <section class="panel-column">
+        <div class="panel-header">
+          <h2><i class="fa-solid fa-chart-line"></i> PERFORMANCE ANALYTICS</h2>
+        </div>
+        <div class="analytics-panel">
+          <div class="metrics-grid">
+            <div class="metric-card">
+              <span class="metric-title">TOTAL REACH</span>
+              <span class="metric-val" id="metric-reach">0</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-title">ENGAGEMENT ER</span>
+              <span class="metric-val" id="metric-er">0.0%</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-title">TOTAL SAVES</span>
+              <span class="metric-val" id="metric-saves">0</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-title">TOTAL SHARES</span>
+              <span class="metric-val" id="metric-shares">0</span>
+            </div>
+          </div>
+          <div class="chart-container">
+            <canvas id="analytics-chart"></canvas>
+          </div>
+        </div>
+      </section>
+      <section class="panel-column">
+        <div class="ai-panel">
+          <div class="panel-header">
+            <h3><i class="fa-solid fa-brain"></i> AI SELF-OPTIMIZATION RECOMMENDATIONS</h3>
+          </div>
+          <div class="recommendations-list" id="recommendations-container">
+            <div class="rec-item">
+              <i class="fa-solid fa-circle-info text-info"></i>
+              <span>Ingest posts to calculate weights.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="/main.js"></script>
+</body>
+</html>

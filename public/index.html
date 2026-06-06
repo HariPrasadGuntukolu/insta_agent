@@ -15,7 +15,7 @@
   <!-- Custom Styles -->
   <link rel="stylesheet" href="/style.css">
 </head>
-<body>
+<body data-page="landing">
   <!-- System Glow Overlay -->
   <div class="system-glow"></div>
 
@@ -58,6 +58,12 @@
         <button class="btn btn-secondary" id="btn-refresh-analytics">
           <i class="fa-solid fa-arrows-rotate"></i> REFRESH STATS
         </button>
+        <button class="btn btn-tertiary" onclick="window.location.href='/queue.html'">
+          <i class="fa-solid fa-list-check"></i> QUEUE
+        </button>
+        <button class="btn btn-tertiary" onclick="window.location.href='/analytics.html'">
+          <i class="fa-solid fa-chart-column"></i> ANALYTICS
+        </button>
       </div>
     </header>
 
@@ -92,103 +98,112 @@
             <span class="panel-subtitle">Edit the selected story, preview the generated visual, and prepare it for publishing.</span>
           </div>
         </div>
-        
-        <!-- Post Workspace (Hidden initially, shown when post is clicked) -->
-        <div id="post-editor-workspace" class="editor-workspace" style="display: none;">
-          <!-- SVG Visual Preview Container -->
-          <div class="preview-container">
-            <div class="preview-tabs">
-              <button class="preview-tab active" id="view-svg-tab">VECTOR (SHARP)</button>
-              <button class="preview-tab" id="view-png-tab">PNG RENDER</button>
-            </div>
-            <div class="visual-wrapper">
-              <div id="svg-preview-frame"></div>
-              <img id="png-preview-frame" style="display: none;" src="" alt="PNG Post Preview">
-            </div>
-          </div>
 
-          <!-- Edit Fields Form -->
-          <div class="editor-form">
-            <div class="form-group">
-              <label for="edit-headline">DISPLAY HEADLINE (Re-renders Image)</label>
-              <input type="text" id="edit-headline" placeholder="Headline text...">
-            </div>
-            <div class="form-group">
-              <label for="edit-description">CONTEXT SUBTITLE</label>
-              <textarea id="edit-description" rows="2" placeholder="One-sentence description..."></textarea>
-            </div>
-            <div class="form-group-row">
-              <div class="form-group">
-                <label for="edit-caption">INSTAGRAM CAPTION</label>
-                <textarea id="edit-caption" rows="6" placeholder="Caption copy..."></textarea>
+        <div class="center-body">
+          <div class="active-post-panel">
+            <!-- Post Workspace (Hidden initially, shown when post is clicked) -->
+            <div id="post-editor-workspace" class="editor-workspace" style="display: none;">
+              <!-- SVG Visual Preview Container -->
+              <div class="preview-container">
+                <div class="preview-tabs">
+                  <button class="preview-tab active" id="view-svg-tab">VECTOR (SHARP)</button>
+                  <button class="preview-tab" id="view-png-tab">PNG RENDER</button>
+                </div>
+                <div class="visual-wrapper">
+                  <div id="svg-preview-frame"></div>
+                  <img id="png-preview-frame" style="display: none;" src="" alt="PNG Post Preview">
+                </div>
               </div>
-              <div class="form-group">
-                <label for="edit-hashtags">HASHTAG ENGINE</label>
-                <textarea id="edit-hashtags" rows="6" placeholder="#hashtags..."></textarea>
+
+              <!-- Edit Fields Form -->
+              <div class="editor-form">
+                <div class="form-group">
+                  <label for="edit-headline">DISPLAY HEADLINE (Re-renders Image)</label>
+                  <input type="text" id="edit-headline" placeholder="Headline text...">
+                </div>
+                <div class="form-group">
+                  <label for="edit-description">CONTEXT SUBTITLE</label>
+                  <textarea id="edit-description" rows="2" placeholder="One-sentence description..."></textarea>
+                </div>
+                <div class="form-group-row">
+                  <div class="form-group">
+                    <label for="edit-caption">INSTAGRAM CAPTION</label>
+                    <textarea id="edit-caption" rows="6" placeholder="Caption copy..."></textarea>
+                  </div>
+                  <div class="form-group">
+                    <label for="edit-hashtags">HASHTAG ENGINE</label>
+                    <textarea id="edit-hashtags" rows="6" placeholder="#hashtags..."></textarea>
+                  </div>
+                </div>
+                <div class="editor-actions">
+                  <button class="btn btn-success" id="btn-save-post">
+                    <i class="fa-solid fa-floppy-disk"></i> SAVE & RE-RENDER GRAPHICS
+                  </button>
+                </div>
               </div>
             </div>
-            <div class="editor-actions">
-              <button class="btn btn-success" id="btn-save-post">
-                <i class="fa-solid fa-floppy-disk"></i> SAVE & RE-RENDER GRAPHICS
-              </button>
+
+            <div id="editor-empty-state" class="empty-state">
+              <i class="fa-solid fa-wand-magic-sparkles"></i>
+              <h3>Visual Composer</h3>
+              <p>Select any verified story from the left feed to preview the generated Instagram graphic, modify captions, or trigger manual publishing.</p>
             </div>
           </div>
-        </div>
 
-        <div id="editor-empty-state" class="empty-state">
-          <i class="fa-solid fa-wand-magic-sparkles"></i>
-          <h3>Visual Composer</h3>
-          <p>Select any verified story from the left feed to preview the generated Instagram graphic, modify captions, or trigger manual publishing.</p>
-        </div>
-
-        <!-- Publishing Queue Section -->
-        <div class="queue-panel">
-          <div class="queue-header">
-            <div>
-              <h3>PUBLISHING QUEUE</h3>
-              <span class="queue-subtitle">Scheduled daily at 07:00 PM IST</span>
+          <div class="landing-shortcuts">
+            <div class="shortcut-card">
+              <div class="shortcut-title">
+                <i class="fa-solid fa-list-check"></i>
+                <div>
+                  <h3>PUBLISHING QUEUE</h3>
+                  <span class="shortcut-caption">Manage scheduled posts and bulk actions on a dedicated page.</span>
+                </div>
+              </div>
+              <p id="home-queue-summary">0 pending · 0 published</p>
+              <a class="btn btn-sm btn-outline-primary" href="/queue.html">Open Queue</a>
             </div>
-            <button class="btn btn-sm btn-outline-primary" id="btn-publish-queue">PUBLISH PENDING NOW</button>
-          </div>
-          <div class="queue-list" id="queue-container">
-            <div class="loading-placeholder">Queue empty. Ingest news first.</div>
+            <div class="shortcut-card">
+              <div class="shortcut-title">
+                <i class="fa-solid fa-chart-line"></i>
+                <div>
+                  <h3>PERFORMANCE ANALYTICS</h3>
+                  <span class="shortcut-caption">Review reach, engagement, and trends on the analytics page.</span>
+                </div>
+              </div>
+              <p id="home-analytics-summary">Summary available on analytics page.</p>
+              <a class="btn btn-sm btn-outline-primary" href="/analytics.html">Open Analytics</a>
+            </div>
           </div>
         </div>
       </section>
 
-      <!-- RIGHT COLUMN: Analytics, Logs & AI Optimization -->
+      <!-- RIGHT COLUMN: Insights & AI Optimization -->
       <section class="panel-column right-col">
-        
-        <!-- Live Analytics Panel -->
-        <div class="analytics-panel">
+        <div class="insights-panel">
           <div class="panel-header">
-            <h2><i class="fa-solid fa-chart-line"></i> PERFORMANCE ANALYTICS</h2>
+            <h2><i class="fa-solid fa-lightbulb"></i> DASHBOARD INSIGHTS</h2>
           </div>
-          <div class="metrics-grid">
-            <div class="metric-card">
-              <span class="metric-title">TOTAL REACH</span>
-              <span class="metric-val" id="metric-reach">0</span>
-              <span class="metric-trend"><i class="fa-solid fa-chevron-up"></i> +12%</span>
+          <div class="insight-grid">
+            <div class="insight-card">
+              <span class="insight-label">Queued Posts</span>
+              <strong id="landing-queue-count">0</strong>
+              <a class="link-button" href="/queue.html">View Queue</a>
             </div>
-            <div class="metric-card">
-              <span class="metric-title">ENGAGEMENT ER</span>
-              <span class="metric-val" id="metric-er">0.0%</span>
-              <span class="metric-trend"><i class="fa-solid fa-chevron-up"></i> +4.5%</span>
+            <div class="insight-card">
+              <span class="insight-label">Next Publish</span>
+              <strong id="landing-next-publish">--</strong>
+              <span class="insight-note">Daily schedule</span>
             </div>
-            <div class="metric-card">
-              <span class="metric-title">TOTAL SAVES</span>
-              <span class="metric-val" id="metric-saves">0</span>
-              <span class="metric-trend"><i class="fa-solid fa-chevron-up"></i> +8.1%</span>
+            <div class="insight-card">
+              <span class="insight-label">Estimated Reach</span>
+              <strong id="landing-reach">0</strong>
+              <a class="link-button" href="/analytics.html">View Analytics</a>
             </div>
-            <div class="metric-card">
-              <span class="metric-title">TOTAL SHARES</span>
-              <span class="metric-val" id="metric-shares">0</span>
-              <span class="metric-trend"><i class="fa-solid fa-chevron-up"></i> +15.2%</span>
+            <div class="insight-card">
+              <span class="insight-label">Live Posts</span>
+              <strong id="landing-post-count">0</strong>
+              <span class="insight-note">Generated today</span>
             </div>
-          </div>
-          
-          <div class="chart-container">
-            <canvas id="analytics-chart"></canvas>
           </div>
         </div>
 
@@ -205,16 +220,6 @@
           </div>
         </div>
 
-        <!-- Live Terminal logs -->
-        <div class="terminal-panel">
-          <div class="panel-header">
-            <h3><i class="fa-solid fa-terminal"></i> LIVE AGENT LOGS</h3>
-            <button class="btn-clear" id="btn-clear-logs"><i class="fa-solid fa-trash-can"></i></button>
-          </div>
-          <div class="terminal-body" id="terminal-log-viewer">
-            <div class="terminal-line system-line">[SYSTEM] Terminal initialized. Waiting for pipeline...</div>
-          </div>
-        </div>
       </section>
 
     </main>
