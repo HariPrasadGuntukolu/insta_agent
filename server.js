@@ -22,28 +22,76 @@ const wss = new WebSocket.Server({ server });
 const PORT = process.env.PORT || 3000;
 const configPath = path.join(__dirname, 'config.json');
 const logsFile = path.join(__dirname, 'database/logs.json');
+const schedulerStateFile = path.join(__dirname, 'database/scheduler_state.json');
 
-// Load Schedule Config dynamically from config.json
+// ─── Load Schedule Config dynamically from config.json ───────────────────────
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-const collectTime = config.pipeline_schedule?.news_collect_time || "06:00";
+const collectTime = config.pipeline_schedule?.news_collect_time || "18:00";
 const publishTime = config.pipeline_schedule?.publish_time || "19:00";
 
 const [collectHour, collectMinute] = collectTime.split(':').map(Number);
 const [publishHour, publishMinute] = publishTime.split(':').map(Number);
 
+// ─── Timezone & Date Utilities ────────────────────────────────────────────────
+function getTodayIST() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // "YYYY-MM-DD"
+}
 
-// Middleware
+function getCurrentHourIST() {
+  return parseInt(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false }), 10);
+}
+
+function getCurrentMinuteIST() {
+  return new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata', minute: '2-digit' });
+}
+
+function getISTTimeString() {
+  return new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
+}
+
+// ─── Persistent Scheduler State ──────────────────────────────────────────────
+function loadSchedulerState() {
+  try {
+    if (fs.existsSync(schedulerStateFile)) {
+      return JSON.parse(fs.readFileSync(schedulerStateFile, 'utf8'));
+    }
+  } catch (e) {
+    logSystem("warning", `[Scheduler] Could not read scheduler state: ${e.message}`);
+  }
+  return {
+    lastHarvestDate: null,
+    lastHarvestTimestamp: null,
+    lastHarvestStatus: null,
+    lastPublishDate: null,
+    lastPublishTimestamp: null,
+    lastPublishStatus: null
+  };
+}
+
+function saveSchedulerState(updates) {
+  try {
+    const current = loadSchedulerState();
+    const updated = { ...current, ...updates };
+    fs.writeFileSync(schedulerStateFile, JSON.stringify(updated, null, 2), 'utf8');
+    return updated;
+  } catch (e) {
+    logSystem("error", `[Scheduler] Failed to save scheduler state: ${e.message}`);
+  }
+}
+
+// ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Global state variables
+// ─── Global State ─────────────────────────────────────────────────────────────
 let activePipelineRun = false;
 let systemRecommendations = [];
 
-// Custom real-time Logger
+// ─── Custom Real-Time Logger ──────────────────────────────────────────────────
 function logSystem(type, message) {
   const logEntry = {
     timestamp: new Date().toISOString(),
+    istTime: getISTTimeString(),
     type: type.toLowerCase(), // "info" | "warning" | "success" | "error"
     message: message
   };
@@ -55,7 +103,7 @@ function logSystem(type, message) {
     warning: "\x1b[33m[WARN]\x1b[0m",
     error: "\x1b[31m[ERROR]\x1b[0m"
   };
-  console.log(`${colors[logEntry.type] || "[INFO]"} ${message}`);
+  console.log(`${colors[logEntry.type] || "[INFO]"} [IST: ${logEntry.istTime}] ${message}`);
 
   // 2. Append to database/logs.json
   try {
@@ -64,7 +112,7 @@ function logSystem(type, message) {
       logs = JSON.parse(fs.readFileSync(logsFile, 'utf8'));
     }
     logs.push(logEntry);
-    if (logs.length > 300) logs.shift(); // limit logs
+    if (logs.length > 500) logs.shift(); // limit logs
     fs.writeFileSync(logsFile, JSON.stringify(logs, null, 2), 'utf8');
   } catch (e) {
     console.error("Failed to write to logs.json:", e.message);
@@ -78,7 +126,7 @@ function logSystem(type, message) {
   });
 }
 
-// Instantiate Services
+// ─── Instantiate Services ─────────────────────────────────────────────────────
 const newsCollector = new NewsCollector(configPath);
 const factVerifier = new FactVerifier(configPath);
 const scoringEngine = new ScoringEngine(configPath);
@@ -88,7 +136,7 @@ const publisher = new Publisher(configPath);
 const analyticsTracker = new AnalyticsTracker(configPath);
 const optimizer = new Optimizer(configPath);
 
-// WebSocket connection handler
+// ─── WebSocket Connection Handler ─────────────────────────────────────────────
 wss.on('connection', (ws) => {
   logSystem("info", "New dashboard connection established.");
   
@@ -105,55 +153,115 @@ wss.on('connection', (ws) => {
   });
 });
 
-// CORE PIPELINE WORKFLOW EXECUTION
+// ─── Database Helper: Append/Update generated post with harvestDate ───────────
+function savePostToDb(post) {
+  const postsFile = path.join(__dirname, 'database/generated_posts.json');
+  let posts = [];
+  if (fs.existsSync(postsFile)) {
+    posts = JSON.parse(fs.readFileSync(postsFile, 'utf8'));
+  }
+
+  // ── FIX: Check if a post with same ID already exists AND is from today ──
+  const todayIST = getTodayIST();
+  const index = posts.findIndex(p => p.id === post.id);
+
+  if (index !== -1) {
+    // If it exists from a DIFFERENT day, it's a different day's run with a recycled ID
+    // (shouldn't happen with date-seeded IDs, but guard anyway)
+    if (posts[index].harvestDate && posts[index].harvestDate !== todayIST) {
+      logSystem("warning", `[DB] Post ID collision across days detected for "${post.title}". Overwriting with today's version.`);
+    }
+    posts[index] = post;
+  } else {
+    posts.push(post);
+  }
+
+  fs.writeFileSync(postsFile, JSON.stringify(posts, null, 2), 'utf8');
+}
+
+// ─── Pipeline Retry Wrapper ───────────────────────────────────────────────────
+async function runWithRetry(fn, label, maxAttempts = 3) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      logSystem("info", `[Retry] ${label} — attempt ${attempt}/${maxAttempts}`);
+      await fn();
+      return true; // success
+    } catch (err) {
+      logSystem("error", `[Retry] ${label} attempt ${attempt} failed: ${err.message}`);
+      if (attempt < maxAttempts) {
+        const waitSec = 30 * attempt;
+        logSystem("info", `[Retry] Waiting ${waitSec}s before next attempt...`);
+        await new Promise(r => setTimeout(r, waitSec * 1000));
+      }
+    }
+  }
+  logSystem("error", `[Retry] ${label} — all ${maxAttempts} attempts exhausted. Giving up.`);
+  return false;
+}
+
+// ─── CORE PIPELINE WORKFLOW EXECUTION ────────────────────────────────────────
 async function runDailyPipeline() {
   if (activePipelineRun) {
-    logSystem("warning", "Pipeline run is already in progress.");
+    logSystem("warning", "Pipeline run is already in progress. Skipping duplicate trigger.");
     return;
   }
+
   activePipelineRun = true;
-  logSystem("info", "=== Starting Global News Pipeline ===");
+  const todayIST = getTodayIST();
   const simulationMode = process.env.SIMULATION_MODE !== "false";
 
+  logSystem("info", `=== Starting Global News Pipeline ===`);
+  logSystem("info", `[Pipeline] Date (IST): ${todayIST}`);
+  logSystem("info", `[Pipeline] Server IST time: ${getISTTimeString()}`);
+  logSystem("info", `[Pipeline] Simulation mode: ${simulationMode}`);
+
   try {
-    // Phase 1: Ingestion (06:00 AM Task)
+    // ── FIX: Expire yesterday's queue items before generating new ones ──
+    logSystem("info", "[Pipeline] Expiring stale queue items from previous days...");
+    publisher.expireStaleQueueItems((m) => logSystem("info", m));
+
+    // Phase 1: Ingestion
     logSystem("info", "Phase 1: Aggregating global news feeds...");
     const rawNews = await newsCollector.collectAll(simulationMode, (m) => logSystem("info", m));
+    logSystem("info", `[Pipeline] News fetched: ${rawNews.length} stories`);
 
-    // Phase 2: Verification (06:30 AM Task)
+    // Phase 2: Verification
     logSystem("info", "Phase 2: Fact-verifying source events...");
     const verifiedNews = factVerifier.verifyAll(rawNews, (m) => logSystem("info", m));
+    logSystem("info", `[Pipeline] Verified stories: ${verifiedNews.length}`);
 
-    // Phase 3: Scoring (06:45 AM Task)
+    // Phase 3: Scoring
     logSystem("info", "Phase 3: Running virality scoring engine...");
-    
-    // Check self-optimization adjustments first
     const optimization = optimizer.optimizeWeights((m) => logSystem("info", m));
     systemRecommendations = optimization.recommendations;
     const adjustedWeights = optimization.adjustedWeights;
-
     const scoredNews = scoringEngine.scoreAndRank(verifiedNews, adjustedWeights, (m) => logSystem("info", m));
 
-    // Phase 4: Selection (07:00 AM Task)
+    // Phase 4: Selection
     logSystem("info", "Phase 4: Selecting daily top 10 content mix...");
     const top10 = scoringEngine.selectDailyTop10(scoredNews, (m) => logSystem("info", m));
 
     if (top10.length === 0) {
       throw new Error("No news stories satisfied the selection criteria.");
     }
+    logSystem("info", `[Pipeline] Selected ${top10.length} top stories for today.`);
 
-    // Phase 5: Copywriting & Visual Generation (07:15 AM - 08:30 AM Tasks)
-    logSystem("info", "Phase 5: Generating visual posts and copywriting copy...");
+    // Phase 5: Copywriting & Visual Generation
+    logSystem("info", "Phase 5: Generating visual posts and copywriting...");
     const finalPosts = [];
 
     for (let i = 0; i < top10.length; i++) {
       const story = top10[i];
-      logSystem("info", `Processing story [${i+1}/10]: "${story.title}"`);
-
-      // Write caption, hashtags & comprehensive summary
-      const copy = await copywriter.generateCaptionAndHashtags(story, (m) => logSystem("info", m));
       
-      // Perform automated post-generation validation on the summary
+      // Introduce pacing delay (6 seconds) between stories to stay within Gemini RPM limits
+      if (i > 0 && copywriter.aiEnabled) {
+        logSystem("info", `[Pipeline] Pacing Gemini requests: waiting 6s...`);
+        await new Promise(r => setTimeout(r, 6000));
+      }
+
+      logSystem("info", `[Pipeline] Processing story [${i+1}/${top10.length}]: "${story.title}"`);
+
+      const copy = await copywriter.generateCaptionAndHashtags(story, (m) => logSystem("info", m));
       const validation = await copywriter.verifySummary(story, copy.summary, (m) => logSystem("info", m));
       
       const postWithCopy = {
@@ -161,6 +269,8 @@ async function runDailyPipeline() {
         description: validation.summary,
         caption: copy.caption,
         hashtags: copy.hashtags,
+        harvestDate: todayIST,   // ── FIX: Always stamp with today's IST date ──
+        generatedAt: new Date().toISOString(),
         status: "scheduled"
       };
 
@@ -177,75 +287,86 @@ async function runDailyPipeline() {
 
       // Save to generated posts database
       savePostToDb(completePost);
+      logSystem("info", `[Pipeline] Post saved: "${completePost.title}" (harvestDate: ${todayIST})`);
 
-      // Add to scheduling queue (scheduled for configured publish time today)
+      // Add to scheduling queue for configured publish time today
       const todayPublishTime = new Date();
       todayPublishTime.setHours(publishHour, publishMinute, 0, 0);
       publisher.addToQueue(completePost, todayPublishTime.toISOString(), (m) => logSystem("info", m));
     }
 
-    logSystem("success", `=== Pipeline Complete. Generated and queued ${finalPosts.length} posts. ===`);
+    logSystem("success", `=== Pipeline Complete. Generated and queued ${finalPosts.length} posts for ${todayIST}. ===`);
+
+    // ── FIX: Save successful harvest state ──
+    saveSchedulerState({
+      lastHarvestDate: todayIST,
+      lastHarvestTimestamp: new Date().toISOString(),
+      lastHarvestStatus: "success"
+    });
 
   } catch (error) {
-    logSystem("error", `Pipeline failed: ${error.message}`);
+    logSystem("error", `[Pipeline] Pipeline failed: ${error.message}`);
+    saveSchedulerState({
+      lastHarvestDate: todayIST,
+      lastHarvestTimestamp: new Date().toISOString(),
+      lastHarvestStatus: `failed: ${error.message}`
+    });
   } finally {
     activePipelineRun = false;
   }
 }
 
-// Database helper: Append/Update generated post
-function savePostToDb(post) {
-  const postsFile = path.join(__dirname, 'database/generated_posts.json');
-  let posts = [];
-  if (fs.existsSync(postsFile)) {
-    posts = JSON.parse(fs.readFileSync(postsFile, 'utf8'));
-  }
-  const index = posts.findIndex(p => p.id === post.id);
-  if (index !== -1) {
-    posts[index] = post;
-  } else {
-    posts.push(post);
-  }
-  fs.writeFileSync(postsFile, JSON.stringify(posts, null, 2), 'utf8');
-}
-
-// AUTOMATED CRON SCHEDULER
-// Ingestion & Generation pipeline scheduled daily
-cron.schedule(`${collectMinute} ${collectHour} * * *`, () => {
-  logSystem("info", `[Scheduler] Triggering daily news harvest (${collectTime})...`);
-  runDailyPipeline();
-});
-
-// Publishing Queue processing scheduled daily
+// ─── Publishing Queue Processor ───────────────────────────────────────────────
 async function processPublishingQueue(specificPostId = null) {
-  logSystem("info", `[Scheduler] Processing daily publishing queue (${publishTime})...`);
+  const todayIST = getTodayIST();
+  logSystem("info", `[Scheduler] Processing daily publishing queue for ${todayIST}...`);
   const simulationMode = process.env.SIMULATION_MODE !== "false";
   
   const queue = publisher.loadQueue();
-  const now = new Date();
-  
-  // Find scheduled items whose time has come (or manually triggered)
+
+  // ── FIX: Only publish items with today's harvestDate ──
   let pendingItems = [];
   if (specificPostId) {
     pendingItems = queue.filter(item => item.id === specificPostId);
   } else {
-    pendingItems = queue.filter(item => item.status === "scheduled" || item.status === "failed");
+    pendingItems = queue.filter(item => {
+      const isScheduledOrFailed = item.status === "scheduled" || item.status === "failed";
+      const isToday = !item.harvestDate || item.harvestDate === todayIST;
+      return isScheduledOrFailed && isToday;
+    });
   }
 
   if (pendingItems.length === 0) {
-    logSystem("info", "[Scheduler] No pending posts scheduled for publishing.");
+    logSystem("info", `[Scheduler] No pending posts for today (${todayIST}) in publishing queue.`);
     return;
   }
 
-  logSystem("info", `[Scheduler] Found ${pendingItems.length} pending posts to publish.`);
+  logSystem("info", `[Scheduler] Found ${pendingItems.length} pending post(s) to publish for ${todayIST}.`);
+
+  let publishedCount = 0;
+  let failedCount = 0;
 
   for (const item of pendingItems) {
     try {
-      await publisher.publishItem(item, simulationMode, (m) => logSystem("info", m));
+      const result = await publisher.publishItem(item, simulationMode, (m) => logSystem("info", m));
+      if (result !== null) {
+        publishedCount++;
+        logSystem("success", `[Scheduler] Published: "${item.title}" — Media ID: ${result}`);
+      }
     } catch (e) {
-      logSystem("error", `[Scheduler] Failed to publish post: ${e.message}`);
+      failedCount++;
+      logSystem("error", `[Scheduler] Failed to publish post "${item.title}": ${e.message}`);
     }
   }
+
+  logSystem("success", `[Scheduler] Publishing run complete. Published: ${publishedCount}, Failed: ${failedCount}.`);
+
+  // ── FIX: Save successful publish state ──
+  saveSchedulerState({
+    lastPublishDate: todayIST,
+    lastPublishTimestamp: new Date().toISOString(),
+    lastPublishStatus: `published:${publishedCount} failed:${failedCount}`
+  });
 
   // After publishing, trigger analytics refresh
   setTimeout(async () => {
@@ -257,26 +378,67 @@ async function processPublishingQueue(specificPostId = null) {
   }, 5000);
 }
 
-cron.schedule(`${publishMinute} ${publishHour} * * *`, () => {
-  processPublishingQueue();
+// ─── AUTOMATED CRON SCHEDULER ─────────────────────────────────────────────────
+// ── FIX: Always pass explicit timezone to node-cron (not relying on process TZ) ──
+
+// Harvest & Generation — daily at configured time in IST
+cron.schedule(`${collectMinute} ${collectHour} * * *`, () => {
+  const todayIST = getTodayIST();
+  logSystem("info", `[Cron] Harvest job triggered at ${getISTTimeString()} IST for date ${todayIST}.`);
+  runWithRetry(runDailyPipeline, "Daily News Harvest", 3);
+}, {
+  timezone: "Asia/Kolkata"   // ── FIX: Explicit IST timezone ──
 });
 
-// REST API ENDPOINTS FOR DASHBOARD
+// Publishing Queue — daily at configured time in IST
+cron.schedule(`${publishMinute} ${publishHour} * * *`, () => {
+  const todayIST = getTodayIST();
+  logSystem("info", `[Cron] Publishing job triggered at ${getISTTimeString()} IST for date ${todayIST}.`);
+  processPublishingQueue();
+}, {
+  timezone: "Asia/Kolkata"   // ── FIX: Explicit IST timezone ──
+});
+
+// ─── KEEP-ALIVE SELF-PING ─────────────────────────────────────────────────────
+// Prevent Render Free Tier from sleeping by pinging /api/status every 14 minutes.
+cron.schedule('*/14 * * * *', () => {
+  const pingUrl = `http://localhost:${PORT}/api/status`;
+  try {
+    const httpClient = require('http');
+    httpClient.get(pingUrl, (res) => {
+      logSystem("info", `[Keep-Alive] Self-ping successful. Status: ${res.statusCode}`);
+    }).on('error', (e) => {
+      logSystem("warning", `[Keep-Alive] Self-ping failed: ${e.message}`);
+    });
+  } catch (e) {
+    logSystem("warning", `[Keep-Alive] Self-ping error: ${e.message}`);
+  }
+});
+
+// ─── REST API ENDPOINTS FOR DASHBOARD ────────────────────────────────────────
 // Get system status
 app.get('/api/status', (req, res) => {
   const simulationMode = process.env.SIMULATION_MODE !== "false";
   const queue = publisher.loadQueue();
-  const pendingCount = queue.filter(q => q.status === "scheduled").length;
+  const todayIST = getTodayIST();
+  const pendingCount = queue.filter(q => q.status === "scheduled" && (!q.harvestDate || q.harvestDate === todayIST)).length;
   const publishedCount = queue.filter(q => q.status === "published").length;
+  const expiredCount = queue.filter(q => q.status === "expired").length;
+  const schedulerState = loadSchedulerState();
   
   res.json({
     status: "active",
     simulationMode,
     activePipelineRun,
+    todayIST,
+    istTime: getISTTimeString(),
     pendingQueueCount: pendingCount,
-    publishedCount: publishedCount,
-    nextPublishTime: `${publishTime} Daily`,
-    envValid: !!(process.env.INSTAGRAM_ACCOUNT_ID && process.env.INSTAGRAM_ACCESS_TOKEN)
+    publishedCount,
+    expiredCount,
+    nextHarvestTime: `${collectTime} IST Daily`,
+    nextPublishTime: `${publishTime} IST Daily`,
+    envValid: !!(process.env.INSTAGRAM_ACCOUNT_ID && process.env.INSTAGRAM_ACCESS_TOKEN),
+    schedulerState
   });
 });
 
@@ -289,11 +451,16 @@ app.get('/api/news', (req, res) => {
   res.json([]);
 });
 
-// Get daily generated posts list
+// Get daily generated posts list (optionally filter by today only)
 app.get('/api/posts', (req, res) => {
   const postsFile = path.join(__dirname, 'database/generated_posts.json');
   if (fs.existsSync(postsFile)) {
-    return res.json(JSON.parse(fs.readFileSync(postsFile, 'utf8')));
+    let posts = JSON.parse(fs.readFileSync(postsFile, 'utf8'));
+    if (req.query.today === 'true') {
+      const todayIST = getTodayIST();
+      posts = posts.filter(p => p.harvestDate === todayIST);
+    }
+    return res.json(posts);
   }
   res.json([]);
 });
@@ -310,7 +477,6 @@ app.get('/api/analytics', (req, res) => {
 
 // Get optimizer recommendations
 app.get('/api/recommendations', (req, res) => {
-  // If recommendations list is empty, call optimize weights to generate them dynamically
   if (systemRecommendations.length === 0) {
     const optimization = optimizer.optimizeWeights(() => {});
     systemRecommendations = optimization.recommendations;
@@ -326,13 +492,17 @@ app.get('/api/logs', (req, res) => {
   res.json([]);
 });
 
+// Get scheduler state
+app.get('/api/scheduler/state', (req, res) => {
+  res.json(loadSchedulerState());
+});
+
 // Manually trigger the pipeline
 app.post('/api/pipeline/run', (req, res) => {
   if (activePipelineRun) {
     return res.status(409).json({ error: "Pipeline is already running." });
   }
-  // Run asynchronously
-  runDailyPipeline();
+  runWithRetry(runDailyPipeline, "Manual Pipeline Trigger", 3);
   res.json({ message: "News Ingestion and Generation pipeline manually triggered." });
 });
 
@@ -398,7 +568,7 @@ app.post('/api/posts/edit', async (req, res) => {
     return res.status(404).json({ error: "Post not found." });
   }
 
-  // Update text
+  // Update text fields
   posts[idx].title = title || posts[idx].title;
   posts[idx].description = description || posts[idx].description;
   posts[idx].caption = caption || posts[idx].caption;
@@ -406,7 +576,6 @@ app.post('/api/posts/edit', async (req, res) => {
 
   // Re-generate SVG and PNG image assets because title/desc changed
   try {
-    // Validate manual edits against news quality standards
     if (description) {
       const validation = await copywriter.verifySummary(posts[idx], posts[idx].description, (m) => logSystem("info", m));
       posts[idx].description = validation.summary;
@@ -415,6 +584,7 @@ app.post('/api/posts/edit', async (req, res) => {
     const assets = await postGenerator.createPost(posts[idx]);
     posts[idx].svgPath = assets.svgPath;
     posts[idx].pngPath = assets.pngPath;
+    posts[idx].lastEditedAt = new Date().toISOString();
     
     // Write back to DB
     fs.writeFileSync(postsFile, JSON.stringify(posts, null, 2), 'utf8');
@@ -443,18 +613,51 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public/index.html'));
 });
 
-// START SERVER
-server.listen(PORT, () => {
+// ─── START SERVER ─────────────────────────────────────────────────────────────
+server.listen(PORT, async () => {
   logSystem("success", `=== Global News Media Automation Server Running on Port ${PORT} ===`);
-  logSystem("info", `Simulation mode active: ${process.env.SIMULATION_MODE !== "false"}`);
-  
-  // Proactively run pipeline on initial startup if generated posts are empty
-  const postsFile = path.join(__dirname, 'database/generated_posts.json');
-  if (fs.existsSync(postsFile)) {
-    const posts = JSON.parse(fs.readFileSync(postsFile, 'utf8'));
-    if (posts.length === 0) {
-      logSystem("info", "[Startup] Empty database detected. Bootstrapping news pipeline...");
-      runDailyPipeline();
+  logSystem("info", `[Startup] Timezone: Asia/Kolkata (IST)`);
+  logSystem("info", `[Startup] Server IST time: ${getISTTimeString()}`);
+  logSystem("info", `[Startup] Today (IST): ${getTodayIST()}`);
+  logSystem("info", `[Startup] Simulation mode: ${process.env.SIMULATION_MODE !== "false"}`);
+  logSystem("info", `[Startup] Harvest cron: ${collectTime} IST daily (node-cron timezone: Asia/Kolkata)`);
+  logSystem("info", `[Startup] Publish cron:  ${publishTime} IST daily (node-cron timezone: Asia/Kolkata)`);
+  logSystem("info", `[Startup] Keep-alive ping: every 14 minutes`);
+
+  // ── Load and display scheduler state ──────────────────────────────────────
+  const state = loadSchedulerState();
+  logSystem("info", `[Startup] Last harvest: ${state.lastHarvestDate || 'Never'} — ${state.lastHarvestStatus || 'N/A'}`);
+  logSystem("info", `[Startup] Last publish: ${state.lastPublishDate || 'Never'} — ${state.lastPublishStatus || 'N/A'}`);
+
+  // ── FIX: Missed-Job Recovery Logic ──────────────────────────────────────
+  // Check if today's harvest was missed (server was asleep or restarted after 6 PM IST)
+  const todayIST = getTodayIST();
+  const currentHourIST = getCurrentHourIST();
+
+  const harvestMissed = state.lastHarvestDate !== todayIST;
+  const publishMissed = state.lastPublishDate !== todayIST;
+
+  if (harvestMissed && currentHourIST >= collectHour) {
+    logSystem("warning", `[Startup Recovery] Harvest was MISSED for today (${todayIST}). Last ran: ${state.lastHarvestDate || 'Never'}. Current IST hour: ${currentHourIST}. Triggering now...`);
+    // Small delay to let server fully boot before starting heavy pipeline
+    setTimeout(() => {
+      runWithRetry(runDailyPipeline, "Startup Recovery — Daily Harvest", 3);
+    }, 5000);
+  } else if (harvestMissed) {
+    logSystem("info", `[Startup Recovery] No harvest yet today (${todayIST}) — harvest window (${collectTime} IST) not reached yet. Cron is registered and will fire on time.`);
+  } else {
+    logSystem("success", `[Startup Recovery] Harvest already completed for today (${todayIST}). No recovery needed.`);
+
+    // ── Check if publish was also missed ──
+    if (publishMissed && currentHourIST >= publishHour) {
+      logSystem("warning", `[Startup Recovery] Publish job was MISSED for today (${todayIST}). Last ran: ${state.lastPublishDate || 'Never'}. Triggering now...`);
+      setTimeout(() => {
+        processPublishingQueue();
+      }, 8000);
+    } else if (publishMissed) {
+      logSystem("info", `[Startup Recovery] Publish window (${publishTime} IST) not yet reached. Cron will fire on time.`);
+    } else {
+      logSystem("success", `[Startup Recovery] Publish already completed for today (${todayIST}). No recovery needed.`);
     }
   }
 });

@@ -2,6 +2,11 @@ const fs = require('fs');
 const path = require('path');
 const http = require('https'); // For live Graph API requests
 
+// ─── Utility: Get today's date string in IST (YYYY-MM-DD) ───────────────────
+function getTodayIST() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
 class Publisher {
   constructor(configPath) {
     const configData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -27,10 +32,21 @@ class Publisher {
   // Add a post to the queue
   addToQueue(post, scheduledTime, logger = console.log) {
     const queue = this.loadQueue();
-    // Check if post already exists in queue
-    if (queue.some(item => item.id === post.id)) {
-      logger(`[Publisher] Post "${post.title}" is already in the publishing queue.`);
-      return;
+    const todayIST = getTodayIST();
+
+    // ── FIX: Check if post already exists in queue FOR TODAY (not any day) ──
+    // This allows re-queuing if the post was originally added on a previous day
+    const existingIndex = queue.findIndex(item => item.id === post.id);
+    if (existingIndex !== -1) {
+      const existing = queue[existingIndex];
+      if (existing.harvestDate === todayIST) {
+        logger(`[Publisher] Post "${post.title}" already in today's queue. Skipping.`);
+        return;
+      } else {
+        // Remove the stale queue entry so today's version can be added
+        logger(`[Publisher] Removing stale queue entry for "${post.title}" (was: ${existing.harvestDate}, now: ${todayIST}).`);
+        queue.splice(existingIndex, 1);
+      }
     }
 
     queue.push({
@@ -40,18 +56,59 @@ class Publisher {
       pngPath: post.pngPath,
       caption: post.caption,
       hashtags: post.hashtags,
-      scheduledTime: scheduledTime, // ISO string
-      status: "scheduled", // "scheduled" | "publishing" | "published" | "failed"
+      harvestDate: post.harvestDate || todayIST,  // ── FIX: Store harvest date ──
+      scheduledTime: scheduledTime,                 // ISO string
+      status: "scheduled",                          // "scheduled" | "publishing" | "published" | "failed" | "expired"
       attempts: 0,
       publishLog: []
     });
 
     this.saveQueue(queue);
-    logger(`[Publisher] Added "${post.title}" to the queue. Scheduled for: ${scheduledTime}`);
+    logger(`[Publisher] Added "${post.title}" to the queue. Harvest date: ${post.harvestDate || todayIST}. Scheduled for: ${scheduledTime}`);
+  }
+
+  // ── FIX: Mark yesterday's scheduled items as expired so they don't get published ──
+  expireStaleQueueItems(logger = console.log) {
+    const todayIST = getTodayIST();
+    const queue = this.loadQueue();
+    let expiredCount = 0;
+
+    for (const item of queue) {
+      if (item.status === 'scheduled' && item.harvestDate && item.harvestDate !== todayIST) {
+        item.status = 'expired';
+        item.expiredAt = new Date().toISOString();
+        expiredCount++;
+        logger(`[Publisher] Expired stale queue item "${item.title}" from ${item.harvestDate}.`);
+      }
+    }
+
+    if (expiredCount > 0) {
+      this.saveQueue(queue);
+      logger(`[Publisher] Expired ${expiredCount} stale queue item(s) from previous days.`);
+    } else {
+      logger(`[Publisher] No stale queue items found.`);
+    }
+    return expiredCount;
   }
 
   // Publish a specific item from the queue
   async publishItem(queueItem, simulationMode = true, logger = console.log) {
+    const todayIST = getTodayIST();
+
+    // ── FIX: Block publishing of posts not harvested today ──
+    if (queueItem.harvestDate && queueItem.harvestDate !== todayIST) {
+      logger(`[Publisher] [Blocked] Skipping post "${queueItem.title}" — harvested on ${queueItem.harvestDate}, today is ${todayIST}. Only today's content is published.`);
+      // Mark it expired in queue
+      const queue = this.loadQueue();
+      const index = queue.findIndex(item => item.id === queueItem.id);
+      if (index !== -1) {
+        queue[index].status = 'expired';
+        queue[index].expiredAt = new Date().toISOString();
+        this.saveQueue(queue);
+      }
+      return null;
+    }
+
     const queue = this.loadQueue();
     const index = queue.findIndex(item => item.id === queueItem.id);
     if (index === -1) {
@@ -106,25 +163,16 @@ class Publisher {
             throw new Error("Meta credentials missing. Please set INSTAGRAM_ACCOUNT_ID and INSTAGRAM_ACCESS_TOKEN in .env.");
           }
 
-          // In standard Meta API:
-          // Step 1: Upload image to create media container
-          // Note: The image must be hosted on a public URL. Since this is running locally,
-          // a live publishing requires hosting. If it is local, it will fail unless tunnel is open.
-          // We will attempt, but fallback on tunnels or report the direct error.
           logger(`[Publisher] [Live] Creating Instagram media container for ${queueItem.pngPath}...`);
           
-          // Construct public URL. Under normal deploys, pngPath is served on the server's public domain.
-          // For local testing, we assume a mock/local domain if not set.
           const serverUrl = process.env.SERVER_PUBLIC_URL || "https://yourdomain.com"; 
           const imageUrl = `${serverUrl}${queueItem.pngPath}`;
 
           containerId = await this.createInstagramMediaContainer(instagramAccountId, instagramAccessToken, imageUrl, fullCaption);
           logger(`[Publisher] [Live] Media container created: ${containerId}. Waiting for processing...`);
           
-          // Step 2: Poll container status
           await this.pollContainerStatus(instagramAccountId, instagramAccessToken, containerId, logger);
 
-          // Step 3: Publish container
           logger(`[Publisher] [Live] Publishing container ${containerId}...`);
           mediaId = await this.publishInstagramContainer(instagramAccountId, instagramAccessToken, containerId);
           success = true;

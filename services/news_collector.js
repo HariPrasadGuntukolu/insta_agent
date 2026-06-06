@@ -5,7 +5,26 @@ const crypto = require('crypto');
 
 const parser = new Parser();
 
-// High-fidelity trending topics bank to populate category-diverse mock stories
+// ─── Utility: Get today's date string in IST (YYYY-MM-DD) ───────────────────
+function getTodayIST() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // returns "YYYY-MM-DD"
+}
+
+// ─── Utility: Check if an ISO date string is within the last 48 hours ────────
+function isRecentEnough(isoDateStr) {
+  if (!isoDateStr) return true; // If no date, allow it through
+  try {
+    const articleDate = new Date(isoDateStr);
+    const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    return articleDate >= cutoff;
+  } catch (e) {
+    return true;
+  }
+}
+
+// ─── High-fidelity trending topics bank ──────────────────────────────────────
+// NOTE: IDs are generated with today's date appended so every daily run
+// produces genuinely NEW post records instead of overwriting yesterday's.
 const MOCK_TRENDS = [
   {
     title: "OpenAI Unveils 'Orion' GPT-5 Model with Advanced Reasoning Capabilities",
@@ -128,74 +147,105 @@ class NewsCollector {
     this.cacheFile = path.join(__dirname, '../database/news_cache.json');
   }
 
-  // Fetch news from RSS and combine with local mock trend data
+  // ── Fetch news from RSS and combine with date-stamped mock trend data ───────
   async collectAll(simulationMode = true, logger = console.log) {
-    logger("[News Ingestion] Starting news collection...");
-    let collectedItems = [];
+    const todayIST = getTodayIST();
+    logger(`[News Ingestion] Starting news collection for date: ${todayIST} (IST)...`);
 
-    // 1. Fetch RSS Feeds if not in strict simulation mode (and as active data fallback)
-    if (!simulationMode) {
-      for (const feed of this.feeds) {
-        try {
-          logger(`[News Ingestion] Fetching feed: ${feed.name}...`);
-          const parsed = await parser.parseURL(feed.url);
-          parsed.items.forEach(item => {
-            const cat = this.inferCategory(item.title + ' ' + item.contentSnippet);
-            collectedItems.push({
-              id: crypto.createHash('md5').update(item.title || '').digest('hex'),
-              title: item.title,
-              description: item.contentSnippet || item.content || "",
-              source: feed.name,
-              category: cat,
-              timestamp: item.isoDate || new Date().toISOString(),
-              url: item.link || "",
-              searchVolume: Math.floor(Math.random() * 20000) + 5000, // RSS feeds don't have search data, so estimate
-              socialMentions: Math.floor(Math.random() * 10000) + 1000,
-              isTrending: false
-            });
-          });
-        } catch (error) {
-          logger(`[News Ingestion] [Warning] Failed to fetch feed ${feed.name}: ${error.message}`);
-        }
+    // ── FIX: Clear stale cache before harvesting ────────────────────────────
+    if (fs.existsSync(this.cacheFile)) {
+      try {
+        fs.unlinkSync(this.cacheFile);
+        logger(`[News Ingestion] Cleared stale news cache.`);
+      } catch (e) {
+        logger(`[News Ingestion] [Warning] Could not clear cache: ${e.message}`);
       }
     }
 
-    // 2. Add high-value mock trends to ensure we have excellent viral headlines
-    logger("[News Ingestion] Injecting high-impact trending news database...");
-    MOCK_TRENDS.forEach(mockItem => {
-      collectedItems.push({
-        id: crypto.createHash('md5').update(mockItem.title).digest('hex'),
-        title: mockItem.title,
-        description: mockItem.description,
-        source: mockItem.source,
-        category: mockItem.category,
-        timestamp: new Date().toISOString(),
-        url: "https://www.globalviralnews.com/news/" + encodeURIComponent(mockItem.title.toLowerCase().replace(/ /g, '-')),
-        searchVolume: mockItem.searchVolume,
-        socialMentions: mockItem.socialMentions,
-        isTrending: true
-      });
-    });
+    let collectedItems = [];
 
-    // Deduplicate stories by title
-    const seen = new Set();
+    // 1. Fetch RSS Feeds unconditionally (not limited by simulationMode)
+    for (const feed of this.feeds) {
+      try {
+        logger(`[News Ingestion] Fetching feed: ${feed.name}...`);
+        const parsed = await parser.parseURL(feed.url);
+        let feedCount = 0;
+        parsed.items.forEach(item => {
+          // ── FIX: Validate RSS article date — skip items older than 48 hours ──
+          if (!isRecentEnough(item.isoDate)) {
+            logger(`[News Ingestion] Skipping stale article (>48h): "${item.title}"`);
+            return;
+          }
+          const cat = this.inferCategory(item.title + ' ' + item.contentSnippet);
+          // ── FIX: Include harvestDate on every item ──
+          collectedItems.push({
+            id: crypto.createHash('md5').update((item.title || '') + todayIST).digest('hex'),
+            title: item.title,
+            description: item.contentSnippet || item.content || "",
+            source: feed.name,
+            category: cat,
+            timestamp: item.isoDate || new Date().toISOString(),
+            harvestDate: todayIST,
+            url: item.link || "",
+            // Boost simulated metrics for RSS items to make them competitive
+            searchVolume: Math.floor(Math.random() * 150000) + 50000,
+            socialMentions: Math.floor(Math.random() * 40000) + 10000,
+            isTrending: false
+          });
+          feedCount++;
+        });
+        logger(`[News Ingestion] Fetched ${feedCount} fresh articles from ${feed.name}.`);
+      } catch (error) {
+        logger(`[News Ingestion] [Warning] Failed to fetch feed ${feed.name}: ${error.message}`);
+      }
+    }
+
+    // Deduplicate RSS stories by title first to accurately count them
+    const seenRss = new Set();
     const uniqueItems = [];
     for (const item of collectedItems) {
       if (!item || !item.title) continue;
       const titleLower = item.title.toLowerCase().trim();
-      if (!seen.has(titleLower)) {
-        seen.add(titleLower);
+      if (!seenRss.has(titleLower)) {
+        seenRss.add(titleLower);
         uniqueItems.push(item);
       }
     }
 
-    // Save to news_cache.json
+    // 2. Add mock trends as a fallback if we don't have enough RSS articles
+    if (uniqueItems.length < 10) {
+      logger(`[News Ingestion] RSS feeds yielded only ${uniqueItems.length} unique articles. Supplementing with mock trends...`);
+      MOCK_TRENDS.forEach(mockItem => {
+        const mockTitleLower = mockItem.title.toLowerCase().trim();
+        if (!seenRss.has(mockTitleLower)) {
+          seenRss.add(mockTitleLower);
+          const dailyUniqueId = crypto.createHash('md5').update(mockItem.title + todayIST).digest('hex');
+          uniqueItems.push({
+            id: dailyUniqueId,
+            title: mockItem.title,
+            description: mockItem.description,
+            source: mockItem.source,
+            category: mockItem.category,
+            timestamp: new Date().toISOString(),
+            harvestDate: todayIST,
+            url: "https://www.globalviralnews.com/news/" + encodeURIComponent(mockItem.title.toLowerCase().replace(/ /g, '-')),
+            searchVolume: mockItem.searchVolume,
+            socialMentions: mockItem.socialMentions,
+            isTrending: true
+          });
+        }
+      });
+    } else {
+      logger(`[News Ingestion] RSS feeds yielded ${uniqueItems.length} unique articles. Skipping mock trends fallback.`);
+    }
+
+    // Save fresh news to cache
     fs.writeFileSync(this.cacheFile, JSON.stringify(uniqueItems, null, 2), 'utf8');
-    logger(`[News Ingestion] News collection completed. Cached ${uniqueItems.length} stories.`);
+    logger(`[News Ingestion] News collection completed. Cached ${uniqueItems.length} stories for ${todayIST}.`);
     return uniqueItems;
   }
 
-  // Simple heuristic category inference
+  // ── Simple heuristic category inference ─────────────────────────────────────
   inferCategory(text = "") {
     const lower = text.toLowerCase();
     if (lower.includes("ai") || lower.includes("gpt") || lower.includes("technology") || lower.includes("chip") || lower.includes("software") || lower.includes("apple") || lower.includes("google") || lower.includes("robot") || lower.includes("quantum")) {

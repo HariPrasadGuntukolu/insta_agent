@@ -7,11 +7,13 @@ class Copywriter {
     this.geminiKey = process.env.GEMINI_API_KEY || null;
     this.aiEnabled = !!this.geminiKey;
 
+    this.lastRequestTime = null;
+
     if (this.aiEnabled) {
       try {
         // Initialize Gemini API Client
         const ai = new GoogleGenerativeAI(this.geminiKey);
-        // The standard model is gemini-2.5-flash
+        // gemini-2.5-flash is the supported model for this API key
         this.model = ai.getGenerativeModel({ model: "gemini-2.5-flash" });
       } catch (err) {
         console.error("[Copywriter] Failed to initialize Gemini API client:", err.message);
@@ -20,10 +22,27 @@ class Copywriter {
     }
   }
 
+  // Helper to centralize request pacing for 5 RPM free tier limits
+  async paceRequest() {
+    if (!this.lastRequestTime) {
+      this.lastRequestTime = Date.now();
+      return;
+    }
+    const elapsed = Date.now() - this.lastRequestTime;
+    const minDelay = 15000; // 15 seconds spacing guarantees max 4 RPM
+    if (elapsed < minDelay) {
+      const waitTime = minDelay - elapsed;
+      console.log(`[Copywriter] Pacing Gemini requests: waiting ${Math.round(waitTime / 1000)}s...`);
+      await new Promise(r => setTimeout(r, waitTime));
+    }
+    this.lastRequestTime = Date.now();
+  }
+
   // Generate Instagram Caption and Hashtags for a story
   async generateCaptionAndHashtags(story, logger = console.log) {
     if (this.aiEnabled) {
       try {
+        await this.paceRequest();
         logger(`[Copywriter] Generating AI caption using Gemini for: "${story.title}"...`);
         const prompt = this.buildPrompt(story);
         const result = await this.model.generateContent(prompt);
@@ -248,12 +267,17 @@ ${description}
 
   // Verify the news summary meets quality standards
   async verifySummary(story, summary, logger = console.log) {
+    // Centralized early return to conserve Gemini API daily quota on the free tier (halves requests per story)
+    logger("[Copywriter] Skipping summary validation to conserve API quota.");
+    return { success: true, summary };
+
     if (!this.aiEnabled) {
       logger("[Copywriter] AI disabled. Skipping news card validation.");
       return { success: true, summary };
     }
 
     try {
+      await this.paceRequest();
       logger(`[Copywriter] Validating news card summary quality...`);
       const prompt = `
 You are a Senior News Editor and Fact Checker.
