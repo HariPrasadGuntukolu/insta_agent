@@ -86,8 +86,11 @@
 
       <!-- MIDDLE COLUMN: Post Preview, Editor & Publishing Queue -->
       <section class="panel-column center-col">
-        <div class="panel-header">
-          <h2><i class="fa-solid fa-pen-to-square"></i> ACTIVE POST EDITOR & PREVIEW</h2>
+        <div class="panel-header panel-header-rich">
+          <div>
+            <h2><i class="fa-solid fa-pen-to-square"></i> ACTIVE POST EDITOR & PREVIEW</h2>
+            <span class="panel-subtitle">Edit the selected story, preview the generated visual, and prepare it for publishing.</span>
+          </div>
         </div>
         
         <!-- Post Workspace (Hidden initially, shown when post is clicked) -->
@@ -140,8 +143,11 @@
 
         <!-- Publishing Queue Section -->
         <div class="queue-panel">
-          <div class="panel-header">
-            <h3><i class="fa-solid fa-clock"></i> PUBLISHING QUEUE (07:00 PM DAILY)</h3>
+          <div class="queue-header">
+            <div>
+              <h3>PUBLISHING QUEUE</h3>
+              <span class="queue-subtitle">Scheduled daily at 07:00 PM IST</span>
+            </div>
             <button class="btn btn-sm btn-outline-primary" id="btn-publish-queue">PUBLISH PENDING NOW</button>
           </div>
           <div class="queue-list" id="queue-container">
