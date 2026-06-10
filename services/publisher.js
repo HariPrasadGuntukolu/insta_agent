@@ -1,32 +1,55 @@
-const fs = require('fs');
-const path = require('path');
-const http = require('https'); // For live Graph API requests
+const fs = require("fs");
+const path = require("path");
+const http = require("https"); // For live Graph API requests
 
 // ─── Utility: Get today's date string in IST (YYYY-MM-DD) ───────────────────
 function getTodayIST() {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 }
 
 class Publisher {
   constructor(configPath) {
-    const configData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const configData = JSON.parse(fs.readFileSync(configPath, "utf8"));
     this.maxRetries = configData.retry_settings.max_retries || 3;
     this.backoffMs = configData.retry_settings.backoff_factor_ms || 5000;
-    this.queueFile = path.join(__dirname, '../database/publishing_queue.json');
-    this.postsFile = path.join(__dirname, '../database/generated_posts.json');
+    this.queueFile = path.join(__dirname, "../database/publishing_queue.json");
+    this.postsFile = path.join(__dirname, "../database/generated_posts.json");
+  }
+
+  normalizeJsonString(data) {
+    if (typeof data !== "string") {
+      return "[]";
+    }
+    return data.replace(/^\uFEFF/, "").trim() || "[]";
   }
 
   // Load the current publishing queue
   loadQueue() {
     if (!fs.existsSync(this.queueFile)) {
-      fs.writeFileSync(this.queueFile, '[]', 'utf8');
+      fs.writeFileSync(this.queueFile, "[]", "utf8");
     }
-    return JSON.parse(fs.readFileSync(this.queueFile, 'utf8'));
+
+    const raw = fs.readFileSync(this.queueFile, "utf8");
+    const normalized = this.normalizeJsonString(raw);
+
+    try {
+      const parsed = JSON.parse(normalized);
+      if (!Array.isArray(parsed)) {
+        throw new Error("Publishing queue file did not contain a JSON array");
+      }
+      return parsed;
+    } catch (error) {
+      console.warn(
+        `[Publisher] Invalid queue JSON detected at ${this.queueFile}. Resetting queue. ${error.message}`,
+      );
+      fs.writeFileSync(this.queueFile, "[]", "utf8");
+      return [];
+    }
   }
 
   // Save the publishing queue
   saveQueue(queue) {
-    fs.writeFileSync(this.queueFile, JSON.stringify(queue, null, 2), 'utf8');
+    fs.writeFileSync(this.queueFile, JSON.stringify(queue, null, 2), "utf8");
   }
 
   // Add a post to the queue
@@ -36,15 +59,19 @@ class Publisher {
 
     // ── FIX: Check if post already exists in queue FOR TODAY (not any day) ──
     // This allows re-queuing if the post was originally added on a previous day
-    const existingIndex = queue.findIndex(item => item.id === post.id);
+    const existingIndex = queue.findIndex((item) => item.id === post.id);
     if (existingIndex !== -1) {
       const existing = queue[existingIndex];
       if (existing.harvestDate === todayIST) {
-        logger(`[Publisher] Post "${post.title}" already in today's queue. Skipping.`);
+        logger(
+          `[Publisher] Post "${post.title}" already in today's queue. Skipping.`,
+        );
         return;
       } else {
         // Remove the stale queue entry so today's version can be added
-        logger(`[Publisher] Removing stale queue entry for "${post.title}" (was: ${existing.harvestDate}, now: ${todayIST}).`);
+        logger(
+          `[Publisher] Removing stale queue entry for "${post.title}" (was: ${existing.harvestDate}, now: ${todayIST}).`,
+        );
         queue.splice(existingIndex, 1);
       }
     }
@@ -56,35 +83,44 @@ class Publisher {
       pngPath: post.pngPath,
       caption: post.caption,
       hashtags: post.hashtags,
-      harvestDate: post.harvestDate || todayIST,  // ── FIX: Store harvest date ──
-      scheduledTime: scheduledTime,                 // ISO string
-      status: "scheduled",                          // "scheduled" | "publishing" | "published" | "failed" | "expired"
+      harvestDate: post.harvestDate || todayIST, // ── FIX: Store harvest date ──
+      scheduledTime: scheduledTime, // ISO string
+      status: "scheduled", // "scheduled" | "publishing" | "published" | "failed" | "expired"
       attempts: 0,
-      publishLog: []
+      publishLog: [],
     });
 
     this.saveQueue(queue);
-    logger(`[Publisher] Added "${post.title}" to the queue. Harvest date: ${post.harvestDate || todayIST}. Scheduled for: ${scheduledTime}`);
+    logger(
+      `[Publisher] Added "${post.title}" to the queue. Harvest date: ${post.harvestDate || todayIST}. Scheduled for: ${scheduledTime}`,
+    );
   }
 
-  // ── FIX: Mark yesterday's scheduled items as expired so they don't get published ──
+  // ── FIX: Only expire queue items that are truly old, so pending posts can still retry later ──
   expireStaleQueueItems(logger = console.log) {
-    const todayIST = getTodayIST();
+    const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const queue = this.loadQueue();
     let expiredCount = 0;
 
     for (const item of queue) {
-      if (item.status === 'scheduled' && item.harvestDate && item.harvestDate !== todayIST) {
-        item.status = 'expired';
-        item.expiredAt = new Date().toISOString();
-        expiredCount++;
-        logger(`[Publisher] Expired stale queue item "${item.title}" from ${item.harvestDate}.`);
+      if (item.status === "scheduled" && item.harvestDate) {
+        const harvestDate = new Date(`${item.harvestDate}T00:00:00.000Z`);
+        if (harvestDate < cutoff) {
+          item.status = "expired";
+          item.expiredAt = new Date().toISOString();
+          expiredCount++;
+          logger(
+            `[Publisher] Expired stale queue item "${item.title}" harvested on ${item.harvestDate}.`,
+          );
+        }
       }
     }
 
     if (expiredCount > 0) {
       this.saveQueue(queue);
-      logger(`[Publisher] Expired ${expiredCount} stale queue item(s) from previous days.`);
+      logger(
+        `[Publisher] Expired ${expiredCount} stale queue item(s) older than 7 days.`,
+      );
     } else {
       logger(`[Publisher] No stale queue items found.`);
     }
@@ -95,22 +131,16 @@ class Publisher {
   async publishItem(queueItem, simulationMode = true, logger = console.log) {
     const todayIST = getTodayIST();
 
-    // ── FIX: Block publishing of posts not harvested today ──
-    if (queueItem.harvestDate && queueItem.harvestDate !== todayIST) {
-      logger(`[Publisher] [Blocked] Skipping post "${queueItem.title}" — harvested on ${queueItem.harvestDate}, today is ${todayIST}. Only today's content is published.`);
-      // Mark it expired in queue
-      const queue = this.loadQueue();
-      const index = queue.findIndex(item => item.id === queueItem.id);
-      if (index !== -1) {
-        queue[index].status = 'expired';
-        queue[index].expiredAt = new Date().toISOString();
-        this.saveQueue(queue);
-      }
+    // ── FIX: Allow older pending or failed posts to publish automatically later
+    if (queueItem.harvestDate && queueItem.harvestDate > todayIST) {
+      logger(
+        `[Publisher] [Blocked] Skipping post "${queueItem.title}" — harvested on ${queueItem.harvestDate}, today is ${todayIST}. Future-dated items are not published early.`,
+      );
       return null;
     }
 
     const queue = this.loadQueue();
-    const index = queue.findIndex(item => item.id === queueItem.id);
+    const index = queue.findIndex((item) => item.id === queueItem.id);
     if (index === -1) {
       throw new Error(`Item ${queueItem.id} not found in queue.`);
     }
@@ -130,61 +160,97 @@ class Publisher {
       queue[index].attempts = attempts;
       const logMsg = `Publish attempt ${attempts}/${this.maxRetries} for: "${queueItem.title}"...`;
       logger(`[Publisher] ${logMsg}`);
-      queue[index].publishLog.push({ timestamp: new Date().toISOString(), message: logMsg });
+      queue[index].publishLog.push({
+        timestamp: new Date().toISOString(),
+        message: logMsg,
+      });
       this.saveQueue(queue);
 
       try {
         if (simulationMode) {
           // Simulate Graph API network latency and behavior
           await this.sleep(2000); // 2 second delay
-          
+
           if (Math.random() < 0.05) {
             // 5% simulated random network failure rate for testing retry behavior
             throw new Error("Simulated Meta API Gateway Timeout (504)");
           }
 
-          containerId = "sim_container_" + Math.floor(Math.random() * 900000000 + 100000000);
-          
+          containerId =
+            "sim_container_" +
+            Math.floor(Math.random() * 900000000 + 100000000);
+
           // Simulate media creation container checking
           await this.sleep(1000);
-          
-          mediaId = "sim_media_" + Math.floor(Math.random() * 900000000 + 100000000);
+
+          mediaId =
+            "sim_media_" + Math.floor(Math.random() * 900000000 + 100000000);
           success = true;
-          
+
           const successMsg = `[Simulation] Published successfully. Media ID: ${mediaId}`;
           logger(`[Publisher] ${successMsg}`);
-          queue[index].publishLog.push({ timestamp: new Date().toISOString(), message: successMsg });
+          queue[index].publishLog.push({
+            timestamp: new Date().toISOString(),
+            message: successMsg,
+          });
         } else {
           // LIVE Instagram Graph API publishing
           const instagramAccountId = process.env.INSTAGRAM_ACCOUNT_ID;
           const instagramAccessToken = process.env.INSTAGRAM_ACCESS_TOKEN;
 
           if (!instagramAccountId || !instagramAccessToken) {
-            throw new Error("Meta credentials missing. Please set INSTAGRAM_ACCOUNT_ID and INSTAGRAM_ACCESS_TOKEN in .env.");
+            throw new Error(
+              "Meta credentials missing. Please set INSTAGRAM_ACCOUNT_ID and INSTAGRAM_ACCESS_TOKEN in .env.",
+            );
           }
 
-          logger(`[Publisher] [Live] Creating Instagram media container for ${queueItem.pngPath}...`);
-          
-          const serverUrl = process.env.SERVER_PUBLIC_URL || "https://yourdomain.com"; 
+          logger(
+            `[Publisher] [Live] Creating Instagram media container for ${queueItem.pngPath}...`,
+          );
+
+          const serverUrl =
+            process.env.SERVER_PUBLIC_URL || "https://yourdomain.com";
           const imageUrl = `${serverUrl}${queueItem.pngPath}`;
 
-          containerId = await this.createInstagramMediaContainer(instagramAccountId, instagramAccessToken, imageUrl, fullCaption);
-          logger(`[Publisher] [Live] Media container created: ${containerId}. Waiting for processing...`);
-          
-          await this.pollContainerStatus(instagramAccountId, instagramAccessToken, containerId, logger);
+          containerId = await this.createInstagramMediaContainer(
+            instagramAccountId,
+            instagramAccessToken,
+            imageUrl,
+            fullCaption,
+          );
+          logger(
+            `[Publisher] [Live] Media container created: ${containerId}. Waiting for processing...`,
+          );
+
+          await this.pollContainerStatus(
+            instagramAccountId,
+            instagramAccessToken,
+            containerId,
+            logger,
+          );
 
           logger(`[Publisher] [Live] Publishing container ${containerId}...`);
-          mediaId = await this.publishInstagramContainer(instagramAccountId, instagramAccessToken, containerId);
+          mediaId = await this.publishInstagramContainer(
+            instagramAccountId,
+            instagramAccessToken,
+            containerId,
+          );
           success = true;
 
           const successMsg = `[Live] Published successfully. Media ID: ${mediaId}`;
           logger(`[Publisher] ${successMsg}`);
-          queue[index].publishLog.push({ timestamp: new Date().toISOString(), message: successMsg });
+          queue[index].publishLog.push({
+            timestamp: new Date().toISOString(),
+            message: successMsg,
+          });
         }
       } catch (error) {
         const errorMsg = `Attempt ${attempts} failed: ${error.message}`;
         logger(`[Publisher] [Error] ${errorMsg}`);
-        queue[index].publishLog.push({ timestamp: new Date().toISOString(), message: errorMsg });
+        queue[index].publishLog.push({
+          timestamp: new Date().toISOString(),
+          message: errorMsg,
+        });
         this.saveQueue(queue);
 
         if (attempts < this.maxRetries) {
@@ -208,26 +274,32 @@ class Publisher {
       queue[index].status = "failed";
       this.saveQueue(queue);
       this.updatePostStatus(queueItem.id, "failed");
-      throw new Error(`Failed to publish story "${queueItem.title}" after ${this.maxRetries} attempts.`);
+      throw new Error(
+        `Failed to publish story "${queueItem.title}" after ${this.maxRetries} attempts.`,
+      );
     }
   }
 
   // Update post status in generated_posts.json
   updatePostStatus(postId, status, mediaId = null) {
     if (fs.existsSync(this.postsFile)) {
-      const posts = JSON.parse(fs.readFileSync(this.postsFile, 'utf8'));
-      const postIndex = posts.findIndex(p => p.id === postId);
+      const posts = JSON.parse(fs.readFileSync(this.postsFile, "utf8"));
+      const postIndex = posts.findIndex((p) => p.id === postId);
       if (postIndex !== -1) {
         posts[postIndex].status = status;
         if (mediaId) posts[postIndex].mediaId = mediaId;
-        fs.writeFileSync(this.postsFile, JSON.stringify(posts, null, 2), 'utf8');
+        fs.writeFileSync(
+          this.postsFile,
+          JSON.stringify(posts, null, 2),
+          "utf8",
+        );
       }
     }
   }
 
   // Sleep utility
   sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   // Helper: Create media container via Instagram Graph API
@@ -235,29 +307,35 @@ class Publisher {
     return new Promise((resolve, reject) => {
       const postData = JSON.stringify({
         image_url: imageUrl,
-        caption: caption
+        caption: caption,
       });
 
       const options = {
-        hostname: 'graph.facebook.com',
+        hostname: "graph.facebook.com",
         path: `/v17.0/${accountId}/media?access_token=${token}`,
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(postData)
-        }
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(postData),
+        },
       };
 
       const req = http.request(options, (res) => {
-        let body = '';
-        res.on('data', chunk => body += chunk);
-        res.on('end', () => {
+        let body = "";
+        res.on("data", (chunk) => (body += chunk));
+        res.on("end", () => {
           try {
             const data = JSON.parse(body);
             if (data.id) {
               resolve(data.id);
             } else {
-              reject(new Error(data.error ? data.error.message : "Failed to create media container"));
+              reject(
+                new Error(
+                  data.error
+                    ? data.error.message
+                    : "Failed to create media container",
+                ),
+              );
             }
           } catch (e) {
             reject(new Error("Invalid response format from Meta API"));
@@ -265,7 +343,7 @@ class Publisher {
         });
       });
 
-      req.on('error', (e) => reject(e));
+      req.on("error", (e) => reject(e));
       req.write(postData);
       req.end();
     });
@@ -280,18 +358,23 @@ class Publisher {
       await this.sleep(3000); // Wait 3s before checking
 
       const status = await new Promise((resolve, reject) => {
-        http.get(`https://graph.facebook.com/v17.0/${containerId}?fields=status_code&access_token=${token}`, (res) => {
-          let body = '';
-          res.on('data', chunk => body += chunk);
-          res.on('end', () => {
-            try {
-              const data = JSON.parse(body);
-              resolve(data.status_code || "UNKNOWN");
-            } catch (e) {
-              resolve("UNKNOWN");
-            }
-          });
-        }).on('error', e => resolve("ERROR"));
+        http
+          .get(
+            `https://graph.facebook.com/v17.0/${containerId}?fields=status_code&access_token=${token}`,
+            (res) => {
+              let body = "";
+              res.on("data", (chunk) => (body += chunk));
+              res.on("end", () => {
+                try {
+                  const data = JSON.parse(body);
+                  resolve(data.status_code || "UNKNOWN");
+                } catch (e) {
+                  resolve("UNKNOWN");
+                }
+              });
+            },
+          )
+          .on("error", (e) => resolve("ERROR"));
       });
 
       logger(`[Publisher] Container status check ${attempts}: ${status}`);
@@ -308,29 +391,35 @@ class Publisher {
   publishInstagramContainer(accountId, token, containerId) {
     return new Promise((resolve, reject) => {
       const postData = JSON.stringify({
-        creation_id: containerId
+        creation_id: containerId,
       });
 
       const options = {
-        hostname: 'graph.facebook.com',
+        hostname: "graph.facebook.com",
         path: `/v17.0/${accountId}/media_publish?access_token=${token}`,
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(postData)
-        }
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(postData),
+        },
       };
 
       const req = http.request(options, (res) => {
-        let body = '';
-        res.on('data', chunk => body += chunk);
-        res.on('end', () => {
+        let body = "";
+        res.on("data", (chunk) => (body += chunk));
+        res.on("end", () => {
           try {
             const data = JSON.parse(body);
             if (data.id) {
               resolve(data.id);
             } else {
-              reject(new Error(data.error ? data.error.message : "Failed to publish media container"));
+              reject(
+                new Error(
+                  data.error
+                    ? data.error.message
+                    : "Failed to publish media container",
+                ),
+              );
             }
           } catch (e) {
             reject(new Error("Invalid response format from Meta API"));
@@ -338,7 +427,7 @@ class Publisher {
         });
       });
 
-      req.on('error', (e) => reject(e));
+      req.on("error", (e) => reject(e));
       req.write(postData);
       req.end();
     });
