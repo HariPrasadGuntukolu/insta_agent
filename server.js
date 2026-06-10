@@ -62,9 +62,10 @@ function getCurrentMinuteIST() {
 }
 
 function getCurrentISTDateTime() {
-  return new Date(
-    new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
-  );
+  const now = new Date();
+  const utcMillis = now.getTime() + now.getTimezoneOffset() * 60000;
+  const istMillis = utcMillis + 5.5 * 60 * 60000;
+  return new Date(istMillis);
 }
 
 function getTargetISTDateTime(timeStr) {
@@ -411,18 +412,31 @@ async function processPublishingQueue(specificPostId = null) {
   );
   const simulationMode = process.env.SIMULATION_MODE !== "false";
 
+  publisher.expireStaleQueueItems((m) => logSystem("info", m));
   const queue = publisher.loadQueue();
+  const currentIST = getCurrentISTDateTime();
 
-  // ── FIX: Only publish items with today's harvestDate ──
+  // ── FIX: Only publish items that are due, pending, or stuck in publishing
   let pendingItems = [];
   if (specificPostId) {
     pendingItems = queue.filter((item) => item.id === specificPostId);
   } else {
     pendingItems = queue.filter((item) => {
-      const isScheduledOrFailed =
-        item.status === "scheduled" || item.status === "failed";
+      const isPendingStatus =
+        item.status === "scheduled" ||
+        item.status === "failed" ||
+        item.status === "publishing";
       const isToday = !item.harvestDate || item.harvestDate === todayIST;
-      return isScheduledOrFailed && isToday;
+      if (!isPendingStatus || !isToday) {
+        return false;
+      }
+
+      if (!item.scheduledTime) {
+        return true;
+      }
+
+      const dueTime = new Date(item.scheduledTime);
+      return !Number.isNaN(dueTime.getTime()) && dueTime <= currentIST;
     });
   }
 
@@ -519,6 +533,22 @@ cron.schedule(
   },
   {
     timezone: "Asia/Kolkata", // ── FIX: Explicit IST timezone ──
+  },
+);
+
+// ─── PUBLISH QUEUE RETRY POLL ─────────────────────────────────────────────────
+cron.schedule(
+  "*/10 * * * *",
+  () => {
+    const todayIST = getTodayIST();
+    logSystem(
+      "info",
+      `[Cron] Queue retry poll triggered at ${getISTTimeString()} IST for date ${todayIST}.`,
+    );
+    processPublishingQueue();
+  },
+  {
+    timezone: "Asia/Kolkata",
   },
 );
 
