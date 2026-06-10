@@ -42,7 +42,16 @@ function getCurrentHourIST() {
 }
 
 function getCurrentMinuteIST() {
-  return new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata', minute: '2-digit' });
+  return parseInt(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata', minute: '2-digit' }), 10);
+}
+
+function getCurrentISTDateTime() {
+  return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+}
+
+function getTargetISTDateTime(timeStr) {
+  const today = getTodayIST();
+  return new Date(`${today}T${timeStr}:00.000+05:30`);
 }
 
 function getISTTimeString() {
@@ -630,16 +639,16 @@ server.listen(PORT, async () => {
   logSystem("info", `[Startup] Last publish: ${state.lastPublishDate || 'Never'} — ${state.lastPublishStatus || 'N/A'}`);
 
   // ── FIX: Missed-Job Recovery Logic ──────────────────────────────────────
-  // Check if today's harvest was missed (server was asleep or restarted after 6 PM IST)
   const todayIST = getTodayIST();
-  const currentHourIST = getCurrentHourIST();
+  const currentISTDateTime = getCurrentISTDateTime();
+  const targetHarvestDateTime = getTargetISTDateTime(collectTime);
+  const targetPublishDateTime = getTargetISTDateTime(publishTime);
 
   const harvestMissed = state.lastHarvestDate !== todayIST;
   const publishMissed = state.lastPublishDate !== todayIST;
 
-  if (harvestMissed && currentHourIST >= collectHour) {
-    logSystem("warning", `[Startup Recovery] Harvest was MISSED for today (${todayIST}). Last ran: ${state.lastHarvestDate || 'Never'}. Current IST hour: ${currentHourIST}. Triggering now...`);
-    // Small delay to let server fully boot before starting heavy pipeline
+  if (harvestMissed && currentISTDateTime >= targetHarvestDateTime) {
+    logSystem("warning", `[Startup Recovery] Harvest was MISSED for today (${todayIST}). Last ran: ${state.lastHarvestDate || 'Never'}. Triggering now...`);
     setTimeout(() => {
       runWithRetry(runDailyPipeline, "Startup Recovery — Daily Harvest", 3);
     }, 5000);
@@ -647,17 +656,23 @@ server.listen(PORT, async () => {
     logSystem("info", `[Startup Recovery] No harvest yet today (${todayIST}) — harvest window (${collectTime} IST) not reached yet. Cron is registered and will fire on time.`);
   } else {
     logSystem("success", `[Startup Recovery] Harvest already completed for today (${todayIST}). No recovery needed.`);
+  }
 
-    // ── Check if publish was also missed ──
-    if (publishMissed && currentHourIST >= publishHour) {
-      logSystem("warning", `[Startup Recovery] Publish job was MISSED for today (${todayIST}). Last ran: ${state.lastPublishDate || 'Never'}. Triggering now...`);
+  if (publishMissed && currentISTDateTime >= targetPublishDateTime) {
+    if (harvestMissed) {
+      logSystem("warning", `[Startup Recovery] Publish window was also missed for today (${todayIST}). Will process queue after harvest recovery completes.`);
+      setTimeout(() => {
+        processPublishingQueue();
+      }, 20000);
+    } else {
+      logSystem("warning", `[Startup Recovery] Publish job was MISSED for today (${todayIST}). Triggering now...`);
       setTimeout(() => {
         processPublishingQueue();
       }, 8000);
-    } else if (publishMissed) {
-      logSystem("info", `[Startup Recovery] Publish window (${publishTime} IST) not yet reached. Cron will fire on time.`);
-    } else {
-      logSystem("success", `[Startup Recovery] Publish already completed for today (${todayIST}). No recovery needed.`);
     }
+  } else if (publishMissed) {
+    logSystem("info", `[Startup Recovery] Publish window (${publishTime} IST) not yet reached. Cron will fire on time.`);
+  } else {
+    logSystem("success", `[Startup Recovery] Publish already completed for today (${todayIST}). No recovery needed.`);
   }
 });

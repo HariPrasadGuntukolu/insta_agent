@@ -21,8 +21,8 @@
     "google_trends_fallback": true
   },
   "pipeline_schedule": {
-    "news_collect_time": "11:20",
-    "publish_time": "11:25"
+    "news_collect_time": "11:45",
+    "publish_time": "11:50"
   },
   "verification": {
     "confidence_threshold": 95,
